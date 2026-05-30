@@ -111,14 +111,18 @@ def issue_token():
     order_id   = data.get('order_id', '')
     book_id    = data.get('book_id', '')
 
-    # Firebase থেকে book info নিয়ে আসো
-    book_data  = fb_get(f'books/{book_id}') if book_id else None
-    drive_link = ''
-    book_title = 'বই'
-
+    # Direct values থেকে নাও অথবা Firebase থেকে
+drive_link = data.get('drive_link', '').strip()
+book_title = data.get('book_title', '').strip()
+if book_id and (not drive_link or not book_title):
+    book_data = fb_get(f'books/{book_id}')
     if book_data and isinstance(book_data, dict):
-        drive_link = book_data.get('ebookLink', '').strip()
-        book_title = book_data.get('title', 'বই')
+        if not drive_link:
+            drive_link = book_data.get('ebookLink', '').strip()
+        if not book_title:
+            book_title = book_data.get('title', 'বই')
+if not book_title:
+    book_title = 'বই'
 
     # Token তৈরি
     token      = str(uuid.uuid4()).replace('-', '')
