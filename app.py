@@ -1,264 +1,325 @@
-from flask import Flask, request, jsonify, redirect
-from flask_cors import CORS
-import uuid, time, requests, os, smtplib
+import os
+import uuid
+import time
+import smtplib
+import requests
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from flask import Flask, request, jsonify, redirect, Response
+from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
 
-# ── Environment Variables (Render-এ set করতে হবে) ──
-ADMIN_KEY    = os.environ.get('ADMIN_KEY', 'boighor2024')
-FIREBASE_URL = os.environ.get('FIREBASE_URL', '')   # https://xxx-rtdb.asia-southeast1.firebasedatabase.app
-GMAIL_USER   = os.environ.get('GMAIL_USER', '')     # yourname@gmail.com
-GMAIL_PASS   = os.environ.get('GMAIL_PASS', '')     # Gmail App Password (16 digit)
-BACKEND_URL  = os.environ.get('BACKEND_URL', '')    # https://boighor-backend-xxx.onrender.com
-STORE_NAME   = os.environ.get('STORE_NAME', 'বইঘর')
+ADMIN_KEY    = os.environ.get("ADMIN_KEY", "boighor2024")
+FIREBASE_URL = os.environ.get("FIREBASE_URL", "").rstrip("/")
+GMAIL_USER   = os.environ.get("GMAIL_USER", "")
+GMAIL_PASS   = os.environ.get("GMAIL_PASS", "")
+BACKEND_URL  = os.environ.get("BACKEND_URL", "").rstrip("/")
+STORE_NAME   = os.environ.get("STORE_NAME", "boighor")
 
-# ── Firebase REST helpers ──
-def fb_set(path, data):
-    if not FIREBASE_URL: return None
-    try:
-        r = requests.put(f"{FIREBASE_URL}/{path}.json", json=data, timeout=10)
-        return r.json()
-    except Exception as e:
-        print(f"Firebase set error: {e}"); return None
 
 def fb_get(path):
-    if not FIREBASE_URL: return None
+    if not FIREBASE_URL:
+        return None
     try:
         r = requests.get(f"{FIREBASE_URL}/{path}.json", timeout=10)
         return r.json()
     except Exception as e:
-        print(f"Firebase get error: {e}"); return None
+        print(f"fb_get error: {e}")
+        return None
+
+
+def fb_set(path, data):
+    if not FIREBASE_URL:
+        return None
+    try:
+        r = requests.put(f"{FIREBASE_URL}/{path}.json", json=data, timeout=10)
+        return r.json()
+    except Exception as e:
+        print(f"fb_set error: {e}")
+        return None
+
 
 def fb_update(path, data):
-    if not FIREBASE_URL: return None
+    if not FIREBASE_URL:
+        return None
     try:
         r = requests.patch(f"{FIREBASE_URL}/{path}.json", json=data, timeout=10)
         return r.json()
     except Exception as e:
-        print(f"Firebase update error: {e}"); return None
+        print(f"fb_update error: {e}")
+        return None
 
-# ── Email sender ──
-def send_email(to_email, buyer_name, book_title, download_url):
+
+def send_email(to_email, buyer_name, book_title, download_url, order_id=""):
     if not GMAIL_USER or not GMAIL_PASS:
-        print("⚠️ Gmail সেট করা নেই — email পাঠানো হয়নি")
+        print("Gmail not configured")
         return False
     try:
-        msg = MIMEMultipart('alternative')
-        msg['Subject'] = f'📚 আপনার ইবুক রেডি — {book_title}'
-        msg['From']    = f'{STORE_NAME} <{GMAIL_USER}>'
-        msg['To']      = to_email
-
         html = f"""
-        <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;background:#fdf6ec;border-radius:12px">
-          <h2 style="color:#b8741a;margin-bottom:4px">📚 {STORE_NAME}</h2>
-          <p style="color:#4a3520">প্রিয় <strong>{buyer_name}</strong>,</p>
-          <p style="color:#4a3520">আপনার ইবুক <strong>"{book_title}"</strong> প্রস্তুত!</p>
-          <div style="margin:28px 0;text-align:center">
-            <a href="{download_url}"
-               style="background:#0f766e;color:#fff;padding:14px 32px;border-radius:10px;
-                      text-decoration:none;font-weight:bold;font-size:16px;display:inline-block">
-              📥 ইবুক ডাউনলোড করুন
-            </a>
+        <html><body style="font-family:Arial;background:#f5f0e8;padding:20px">
+        <div style="max-width:520px;margin:auto;background:#fff;border-radius:12px;overflow:hidden">
+          <div style="background:linear-gradient(135deg,#2c1a08,#8a5210);padding:28px;text-align:center;color:#fff">
+            <h1 style="margin:0">Boighor</h1>
           </div>
-          <p style="color:#dc2626;font-size:13px;font-weight:600">
-            ⚠️ এই লিংকটি মাত্র একবার ব্যবহার করা যাবে।
-          </p>
-          <p style="color:#9a8060;font-size:12px">
-            ৭ দিনের মধ্যে download করুন।<br>
-            সমস্যা হলে reply করুন।
-          </p>
-          <hr style="border:none;border-top:1px solid #e8dcc8;margin:16px 0">
-          <p style="color:#9a8060;font-size:11px">ধন্যবাদ {STORE_NAME} থেকে কেনার জন্য।</p>
+          <div style="padding:28px;color:#1a1208">
+            <p>Dear {buyer_name},</p>
+            <div style="background:#fdf6ec;border:1.5px solid #e8dcc8;border-radius:10px;padding:16px;margin:16px 0;text-align:center">
+              <div style="font-size:36px">book</div>
+              <strong style="color:#8a5210">{book_title}</strong>
+              <div style="font-size:11px;color:#9a8060;font-family:monospace">Order: {order_id}</div>
+            </div>
+            <div style="text-align:center;margin:20px 0">
+              <a href="{download_url}" style="background:linear-gradient(135deg,#16a34a,#15803d);color:#fff;
+                 padding:14px 28px;border-radius:10px;text-decoration:none;font-weight:bold;font-size:16px">
+                Download Ebook
+              </a>
+            </div>
+            <div style="background:#fef9c3;border:1.5px solid #fde047;border-radius:8px;padding:12px;font-size:13px;color:#713f12">
+              This link works ONLY ONCE. Download immediately after clicking.
+            </div>
+            <p style="font-size:12px;color:#9a8060;margin-top:12px">
+              Lost the link? Visit: <a href="{BACKEND_URL}/resend">{BACKEND_URL}/resend</a>
+            </p>
+          </div>
+          <div style="background:#2c1a08;color:#c4a77d;text-align:center;padding:14px;font-size:12px">
+            This book is for your use only. Sharing is prohibited.
+          </div>
         </div>
+        </body></html>
         """
-        msg.attach(MIMEText(html, 'html', 'utf-8'))
-
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = f"Your Ebook is Ready: {book_title}"
+        msg["From"]    = f"Boighor <{GMAIL_USER}>"
+        msg["To"]      = to_email
+        msg.attach(MIMEText(html, "html", "utf-8"))
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(GMAIL_USER, GMAIL_PASS)
             server.sendmail(GMAIL_USER, to_email, msg.as_string())
-        print(f"✅ Email পাঠানো হয়েছে → {to_email}")
+        print(f"Email sent to {to_email}")
         return True
     except Exception as e:
-        print(f"❌ Email error: {e}")
+        print(f"Email error: {e}")
         return False
 
-# ════════════════════════════════════════════
-# ROUTES
-# ════════════════════════════════════════════
 
-@app.route('/health')
+def html_page(title, body_html, show_resend=False, order_hint=""):
+    resend_form = ""
+    if show_resend:
+        resend_form = f"""
+        <div style="margin-top:20px;background:#fff;border-radius:10px;padding:18px;box-shadow:0 2px 8px rgba(0,0,0,.08)">
+          <p style="font-weight:700;margin:0 0 10px">Get New Link:</p>
+          <input type="email" id="re_email" placeholder="Your email"
+            style="width:100%;padding:10px;border:1.5px solid #e8dcc8;border-radius:8px;font-size:14px;margin-bottom:8px;box-sizing:border-box"/>
+          <input type="text" id="re_order" value="{order_hint}" placeholder="Order ID"
+            style="width:100%;padding:10px;border:1.5px solid #e8dcc8;border-radius:8px;font-size:14px;box-sizing:border-box"/>
+          <button onclick="resendLink()"
+            style="width:100%;margin-top:12px;padding:13px;background:linear-gradient(135deg,#b8741a,#8a5210);
+                   color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer">
+            Send New Link
+          </button>
+          <div id="re_msg" style="margin-top:10px;font-size:13px"></div>
+        </div>
+        <script>
+        async function resendLink() {{
+          var e=document.getElementById("re_email").value.trim();
+          var o=document.getElementById("re_order").value.trim();
+          var m=document.getElementById("re_msg");
+          if(!e||!o){{m.textContent="Enter email and order ID";m.style.color="#dc2626";return;}}
+          m.textContent="Sending...";m.style.color="#9a8060";
+          try{{
+            var r=await fetch("{BACKEND_URL}/resend-link",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{email:e,order_id:o}})}});
+            var d=await r.json();
+            if(d.success){{m.textContent="New link sent! Check email.";m.style.color="#16a34a";}}
+            else{{m.textContent="Error: "+(d.error||"Problem occurred");m.style.color="#dc2626";}}
+          }}catch(err){{m.textContent="Network error";m.style.color="#dc2626";}}
+        }}
+        </script>
+        """
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>{title}</title>
+<style>*{{box-sizing:border-box;margin:0;padding:0}}body{{font-family:Arial,sans-serif;background:#f5f0e8;
+min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;color:#1a1208}}
+.wrap{{max-width:440px;width:100%}}.top{{background:linear-gradient(135deg,#2c1a08,#8a5210);color:#fff;
+padding:18px 22px;border-radius:14px 14px 0 0;text-align:center}}
+.card{{background:#fff;border-radius:0 0 14px 14px;padding:24px;box-shadow:0 4px 20px rgba(0,0,0,.10)}}
+.icon{{font-size:52px;text-align:center;margin-bottom:14px}}
+h3{{font-size:18px;font-weight:700;text-align:center;margin-bottom:10px}}
+p{{font-size:14px;color:#4a3520;line-height:1.7}}</style></head>
+<body><div class="wrap"><div class="top"><h2>Boighor</h2></div>
+<div class="card">{body_html}{resend_form}</div></div></body></html>"""
+
+
+@app.route("/health")
 def health():
     return jsonify({
-        'status':   'ok',
-        'message':  f'{STORE_NAME} Backend চালু আছে ✅',
-        'firebase': '✅ Connected' if FIREBASE_URL else '❌ Not set',
-        'email':    '✅ Ready'     if (GMAIL_USER and GMAIL_PASS) else '❌ Not set'
+        "status":   "ok",
+        "store":    STORE_NAME,
+        "firebase": "connected" if FIREBASE_URL else "not set",
+        "email":    "ready" if (GMAIL_USER and GMAIL_PASS) else "not set"
     })
 
-# ── Admin: Token তৈরি করো ──
-@app.route('/admin/issue-token', methods=['POST'])
+
+@app.route("/admin/issue-token", methods=["POST"])
 def issue_token():
-    data = request.json or {}
+    data = request.get_json(force=True, silent=True) or {}
 
-    if data.get('admin_key') != ADMIN_KEY:
-        return jsonify({'error': 'Unauthorized — admin_key ভুল'}), 401
+    if data.get("admin_key") != ADMIN_KEY:
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
 
-    email      = data.get('email', '').strip()
-    buyer_name = data.get('buyer_name', 'ক্রেতা').strip()
-    order_id   = data.get('order_id', '')
-    book_id    = data.get('book_id', '')
+    email      = (data.get("email") or "").strip()
+    buyer_name = (data.get("buyer_name") or "Customer").strip()
+    order_id   = (data.get("order_id") or "").strip()
+    book_id    = (data.get("book_id") or "").strip()
+    drive_link = (data.get("drive_link") or "").strip()
+    book_title = (data.get("book_title") or "").strip()
 
-    # Direct values থেকে নাও অথবা Firebase থেকে
-drive_link = data.get('drive_link', '').strip()
-book_title = data.get('book_title', '').strip()
-if book_id and (not drive_link or not book_title):
-    book_data = fb_get(f'books/{book_id}')
-    if book_data and isinstance(book_data, dict):
-        if not drive_link:
-            drive_link = book_data.get('ebookLink', '').strip()
-        if not book_title:
-            book_title = book_data.get('title', 'বই')
-if not book_title:
-    book_title = 'বই'
-    # Token তৈরি
-    token      = str(uuid.uuid4()).replace('-', '')
-    base_url   = BACKEND_URL or request.host_url.rstrip('/')
-    dl_url     = f"{base_url}/download/{token}"
+    if book_id and (not drive_link or not book_title):
+        book_data = fb_get(f"books/{book_id}")
+        if book_data and isinstance(book_data, dict):
+            if not drive_link:
+                drive_link = (book_data.get("ebookLink") or "").strip()
+            if not book_title:
+                book_title = (book_data.get("title") or "Book").strip()
 
-    # Firebase-এ সেভ করো
-    fb_set(f'tokens/{token}', {
-        'token':      token,
-        'bookId':     book_id,
-        'bookTitle':  book_title,
-        'driveLink':  drive_link,
-        'email':      email,
-        'buyerName':  buyer_name,
-        'orderId':    order_id,
-        'createdAt':  int(time.time() * 1000),
-        'used':       False,
-        'expiresAt':  int(time.time()) + 7 * 24 * 3600  # ৭ দিন
+    if not book_title:
+        book_title = "Book"
+
+    if not drive_link:
+        return jsonify({"success": False, "error": "ebookLink not found"}), 400
+
+    token    = str(uuid.uuid4()).replace("-", "")
+    base_url = BACKEND_URL or request.host_url.rstrip("/")
+    dl_url   = f"{base_url}/download/{token}"
+
+    fb_set(f"tokens/{token}", {
+        "token":     token,
+        "bookId":    book_id,
+        "bookTitle": book_title,
+        "driveLink": drive_link,
+        "email":     email,
+        "buyerName": buyer_name,
+        "orderId":   order_id,
+        "createdAt": int(time.time() * 1000),
+        "used":      False,
+        "expiresAt": int(time.time()) + 7 * 24 * 3600
     })
 
-    # Email পাঠাও
-    email_sent = send_email(email, buyer_name, book_title, dl_url) if email else False
+    email_sent = False
+    if email:
+        email_sent = send_email(email, buyer_name, book_title, dl_url, order_id)
 
     return jsonify({
-        'success':      True,
-        'token':        token,
-        'download_url': dl_url,
-        'email_sent':   email_sent
+        "success":      True,
+        "token":        token,
+        "download_url": dl_url,
+        "email_sent":   email_sent
     })
 
-# ── Download: Token চেক করে redirect ──
-@app.route('/download/<token>')
+
+@app.route("/download/<token>")
 def download_file(token):
-    td = fb_get(f'tokens/{token}')
+    td = fb_get(f"tokens/{token}")
 
     if not td or not isinstance(td, dict):
-        return _page('❌ অবৈধ লিংক', 'এই ডাউনলোড লিংকটি বৈধ নয়।', '#dc2626'), 404
+        body = '<div class="icon">not found</div><h3>Link Not Found</h3><p>This download link is not valid.</p>'
+        return Response(html_page("Not Found", body, show_resend=True),
+                        content_type="text/html; charset=utf-8"), 404
 
-    if td.get('used'):
-        return _page('⚠️ লিংক ব্যবহৃত হয়েছে',
-                     'এই লিংকটি আগেই একবার ব্যবহার করা হয়েছে।<br>নতুন লিংকের জন্য দোকানে যোগাযোগ করুন।',
-                     '#f59e0b'), 410
+    if td.get("used"):
+        oid  = td.get("orderId", "")
+        body = '<div class="icon">expired</div><h3>Link Already Used</h3><p>This link was used once. Request a new one.</p>'
+        return Response(html_page("Used", body, show_resend=True, order_hint=oid),
+                        content_type="text/html; charset=utf-8"), 410
 
-    if td.get('expiresAt', 0) < int(time.time()):
-        return _page('⏰ মেয়াদ শেষ',
-                     'এই লিংকটির মেয়াদ (৭ দিন) শেষ হয়ে গেছে।',
-                     '#9a8060'), 410
+    if td.get("expiresAt", 0) < int(time.time()):
+        oid  = td.get("orderId", "")
+        body = '<div class="icon">expired</div><h3>Link Expired</h3><p>This link expired after 7 days.</p>'
+        return Response(html_page("Expired", body, show_resend=True, order_hint=oid),
+                        content_type="text/html; charset=utf-8"), 410
 
-    drive_link = td.get('driveLink', '').strip()
+    drive_link = (td.get("driveLink") or "").strip()
     if not drive_link:
-        return _page('❌ ফাইল পাওয়া যায়নি',
-                     'ফাইল লিংক এখনও সেট করা হয়নি।', '#dc2626'), 404
+        body = '<div class="icon">error</div><h3>File Not Found</h3><p>Please contact support.</p>'
+        return Response(html_page("Error", body),
+                        content_type="text/html; charset=utf-8"), 404
 
-    # Used mark করো redirect-এর আগে
-    fb_update(f'tokens/{token}', {
-        'used':   True,
-        'usedAt': int(time.time() * 1000)
+    fb_update(f"tokens/{token}", {
+        "used":   True,
+        "usedAt": int(time.time() * 1000)
     })
+    return redirect(drive_link, code=302)
 
-    return redirect(drive_link)
 
-# ── Admin: পুরনো link বাতিল করে নতুন পাঠাও ──
-@app.route('/resend-link', methods=['POST'])
+@app.route("/resend-link", methods=["POST"])
 def resend_link():
-    data     = request.json or {}
-    email    = data.get('email', '').strip()
-    order_id = data.get('order_id', '')
+    data     = request.get_json(force=True, silent=True) or {}
+    email    = (data.get("email") or "").strip().lower()
+    order_id = (data.get("order_id") or "").strip()
 
-    # পুরনো token খোঁজো
-    all_tokens = fb_get('tokens') or {}
-    old_token  = None
+    if not email or not order_id:
+        return jsonify({"success": False, "error": "email and order_id required"}), 400
+
+    all_tokens = fb_get("tokens") or {}
+    found_key  = None
+    found_data = None
 
     if isinstance(all_tokens, dict):
         for tk, tv in all_tokens.items():
-            if isinstance(tv, dict) and tv.get('orderId') == order_id and not tv.get('used'):
-                old_token = tk
+            if isinstance(tv, dict) and tv.get("orderId") == order_id:
+                if tv.get("email", "").lower() != email:
+                    return jsonify({"success": False, "error": "Email or Order ID mismatch"}), 403
+                found_key  = tk
+                found_data = tv
                 break
 
-    # পুরনো token বাতিল
-    old_data = {}
-    if old_token and isinstance(all_tokens.get(old_token), dict):
-        old_data = all_tokens[old_token]
-        fb_update(f'tokens/{old_token}', {'used': True})
+    if not found_data:
+        return jsonify({"success": False, "error": "Order not found"}), 404
 
-    book_title = old_data.get('bookTitle', 'বই')
-    drive_link = old_data.get('driveLink', '')
-    buyer_name = old_data.get('buyerName', 'ক্রেতা')
+    if found_key:
+        fb_update(f"tokens/{found_key}", {"used": True})
 
-    # নতুন token তৈরি
-    new_token = str(uuid.uuid4()).replace('-', '')
-    base_url  = BACKEND_URL or request.host_url.rstrip('/')
+    new_token = str(uuid.uuid4()).replace("-", "")
+    base_url  = BACKEND_URL or ""
     dl_url    = f"{base_url}/download/{new_token}"
 
-    fb_set(f'tokens/{new_token}', {
-        'token':      new_token,
-        'bookTitle':  book_title,
-        'driveLink':  drive_link,
-        'email':      email,
-        'buyerName':  buyer_name,
-        'orderId':    order_id,
-        'createdAt':  int(time.time() * 1000),
-        'used':       False,
-        'expiresAt':  int(time.time()) + 7 * 24 * 3600
+    fb_set(f"tokens/{new_token}", {
+        "token":     new_token,
+        "bookId":    found_data.get("bookId", ""),
+        "bookTitle": found_data.get("bookTitle", "Book"),
+        "driveLink": found_data.get("driveLink", ""),
+        "email":     email,
+        "buyerName": found_data.get("buyerName", "Customer"),
+        "orderId":   order_id,
+        "createdAt": int(time.time() * 1000),
+        "used":      False,
+        "expiresAt": int(time.time()) + 7 * 24 * 3600,
+        "resent":    True
     })
 
-    email_sent = send_email(email, buyer_name, book_title, dl_url) if email else False
+    email_sent = send_email(
+        email,
+        found_data.get("buyerName", "Customer"),
+        found_data.get("bookTitle", "Book"),
+        dl_url, order_id
+    )
+    if not email_sent:
+        return jsonify({"success": False, "error": "Could not send email"}), 500
 
-    return jsonify({
-        'success':      True,
-        'message':      f'নতুন লিংক {email}-এ পাঠানো হয়েছে' if email_sent else 'নতুন token তৈরি হয়েছে (email যায়নি)',
-        'download_url': dl_url,
-        'email_sent':   email_sent
-    })
+    return jsonify({"success": True, "message": "New link sent"})
 
-# ── Copyright verify page ──
-@app.route('/verify-copyright')
-def verify_copyright():
-    return f"""
-    <html><head><title>Copyright Verification</title></head>
-    <body style="font-family:Arial;text-align:center;padding:60px;background:#fdf6ec">
-      <h1 style="color:#b8741a">📚 {STORE_NAME}</h1>
-      <h2 style="color:#16a34a">✅ Copyright Protected</h2>
-      <p style="color:#4a3520">এই স্টোর থেকে বিক্রিত সকল বই কপিরাইট সুরক্ষিত।</p>
-      <p style="color:#9a8060;font-size:13px">Unauthorized distribution is strictly prohibited.</p>
-    </body></html>
-    """
 
-# ── Helper: সুন্দর error page ──
-def _page(title, msg, color='#dc2626'):
-    return f"""
-    <html><head><title>{title}</title></head>
-    <body style="font-family:Arial;text-align:center;padding:60px;background:#fdf6ec">
-      <h2 style="color:{color}">{title}</h2>
-      <p style="color:#4a3520">{msg}</p>
-    </body></html>
-    """
+@app.route("/resend")
+def resend_page():
+    body = '<div class="icon">refresh</div><h3>Get New Download Link</h3><p>Enter your email and order ID to get a new link.</p>'
+    return Response(
+        html_page("New Link", body, show_resend=True),
+        content_type="text/html; charset=utf-8"
+    )
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
