@@ -123,7 +123,6 @@ if book_id and (not drive_link or not book_title):
             book_title = book_data.get('title', 'বই')
 if not book_title:
     book_title = 'বই'
-
     # Token তৈরি
     token      = str(uuid.uuid4()).replace('-', '')
     base_url   = BACKEND_URL or request.host_url.rstrip('/')
