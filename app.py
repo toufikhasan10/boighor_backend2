@@ -32,15 +32,17 @@ def send_email_via_gas(to_email, buyer_name, book_title, download_url):
         print("❌ GAS_URL set নেই")
         return False
     try:
-        params = urllib.parse.urlencode({
+        # GET এর বদলে POST মেথডে JSON ডাটা পাঠানো হচ্ছে (সবচেয়ে নিরাপদ পদ্ধতি)
+        payload = {
             "action": "sendEmail",
             "to":     to_email,
             "name":   buyer_name,
             "book":   book_title,
             "link":   download_url,
             "store":  STORE_NAME
-        })
-        r = requests.get(f"{GAS_URL}?{params}", timeout=20, allow_redirects=True)
+        }
+        # timeout 20 সেকেন্ড রাখা হলো যেন GAS রেসপন্স করতে সময় পায়
+        r = requests.post(GAS_URL, json=payload, timeout=20, allow_redirects=True)
         print(f"✅ GAS response ({r.status_code}): {r.text[:200]}")
         return r.status_code == 200 and "error" not in r.text.lower()
     except Exception as e:
@@ -52,7 +54,7 @@ def health():
     return jsonify({
         "status":   "ok",
         "firebase": "✅" if FIREBASE_URL else "❌ not set",
-        "email":    "✅ GAS" if GAS_URL else "⚠️ GAS_URL not set"
+        "email":    "✅ GAS POST" if GAS_URL else "⚠️ GAS_URL not set"
     })
 
 @app.route("/admin/issue-token", methods=["POST"])
