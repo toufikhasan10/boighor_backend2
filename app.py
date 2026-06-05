@@ -207,6 +207,13 @@ def library():
 </html>
 """, store=STORE_NAME)
 
+@app.route("/download/<token>")
+def download_landing(token):
+    """
+    Entry point for email links. Redirects users to the confirmation/import page.
+    """
+    return redirect(f"/download/{token}/confirm")
+
 @app.route("/download/<token>/confirm")
 def download_confirm(token):
     t = fb_get(f"tokens/{token}")
@@ -255,7 +262,6 @@ def download_confirm(token):
                 const response = await fetch(`/stream-pdf/${token}`);
                 if (!response.ok) throw new Error("Stream failed");
 
-                // Track progress
                 const reader = response.body.getReader();
                 const contentLength = +response.headers.get('Content-Length');
                 let receivedLength = 0;
@@ -266,7 +272,7 @@ def download_confirm(token):
                     if (done) break;
                     chunks.push(value);
                     receivedLength += value.length;
-                    const pct = Math.round((receivedLength / contentLength) * 100);
+                    const pct = contentLength ? Math.round((receivedLength / contentLength) * 100) : 0;
                     progress.style.width = pct + '%';
                     status.innerText = `Downloading: ${pct}%`;
                 }
@@ -346,9 +352,8 @@ def reader():
         let pdfDoc = null;
         const container = document.getElementById('viewer-container');
         const pageInfo = document.getElementById('page-info');
-        const activePages = new Map(); // Track which pages are currently rendered as canvas
+        const activePages = new Map();
 
-        // 1. Anti-Piracy Shield
         document.addEventListener('keydown', e => {
             if (e.ctrlKey && (e.key === 'p' || e.key === 's' || e.key === 'u')) e.preventDefault();
             if (e.key === 'F12') e.preventDefault();
@@ -371,28 +376,21 @@ def reader():
 
             const arrayBuffer = await book.blob.arrayBuffer();
             pdfDoc = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
-            
             pageInfo.innerText = `মোট পৃষ্ঠা: ${pdfDoc.numPages}`;
 
-            // 2. Virtual Windowing Setup
             for (let i = 1; i <= pdfDoc.numPages; i++) {
                 const placeholder = document.createElement('div');
                 placeholder.className = 'page-placeholder';
                 placeholder.dataset.pageNumber = i;
                 placeholder.innerText = `Page ${i}`;
-                
-                // We set a rough height for the placeholder so the scrollbar works
                 placeholder.style.height = '80vh'; 
-                
                 container.appendChild(placeholder);
             }
-
             setupIntersectionObserver();
         }
 
         function setupIntersectionObserver() {
             const options = { root: null, rootMargin: '200px', threshold: 0.1 };
-            
             const observer = new IntersectionObserver((entries) => {
                 entries.forEach(entry => {
                     const pageNum = parseInt(entry.target.dataset.pageNumber);
@@ -405,7 +403,6 @@ def reader():
             }, options);
 
             document.querySelectorAll('.page-placeholder').forEach(el => observer.observe(el));
-            // Also observe canvases themselves
             const mutationObserver = new MutationObserver(() => {
                 document.querySelectorAll('canvas').forEach(canvas => {
                     const pageNum = canvas.dataset.pageNumber;
@@ -417,11 +414,8 @@ def reader():
 
         async function renderPage(element, pageNum) {
             if (activePages.has(pageNum)) return;
-            
             const page = await pdfDoc.getPage(pageNum);
             const viewport = page.getViewport({ scale: 1.5 });
-            
-            // Mobile fit
             const screenWidth = window.innerWidth - 20;
             const scale = screenWidth / viewport.width;
             const scaledViewport = page.getViewport({ scale: scale });
@@ -430,37 +424,27 @@ def reader():
             canvas.dataset.pageNumber = pageNum;
             canvas.width = scaledViewport.width;
             canvas.height = scaledViewport.height;
-            
             const context = canvas.getContext('2d');
             await page.render({ canvasContext: context, viewport: scaledViewport }).promise;
-            
-            // Replace placeholder with canvas
             element.replaceWith(canvas);
             activePages.set(pageNum, canvas);
         }
 
         function unloadPage(element, pageNum) {
-            // If the element is a canvas, replace it back with a placeholder to save RAM
             if (element.tagName === 'CANVAS') {
                 const placeholder = document.createElement('div');
                 placeholder.className = 'page-placeholder';
                 placeholder.dataset.pageNumber = pageNum;
                 placeholder.style.height = element.offsetHeight + 'px';
                 placeholder.innerText = `Page ${pageNum}`;
-                
                 element.replaceWith(placeholder);
                 activePages.delete(pageNum);
-                
-                // Re-observe the new placeholder
                 const observer = new IntersectionObserver((entries) => {
-                    entries.forEach(e => {
-                        if (e.isIntersecting) renderPage(e.target, pageNum);
-                    });
+                    entries.forEach(e => { if (e.isIntersecting) renderPage(e.target, pageNum); });
                 }, { rootMargin: '200px' });
                 observer.observe(placeholder);
             }
         }
-
         initReader();
     </script>
 </body>
@@ -471,11 +455,9 @@ def reader():
 def stream_pdf(token):
     t = fb_get(f"tokens/{token}")
     if t is False or not isinstance(t, dict): return "Unauthorized", 403
-    
     drive_link = t.get("drive_link", "")
     direct_url = get_google_drive_direct_link(drive_link)
     if not direct_url: return "File not found", 404
-
     try:
         r = requests.get(direct_url, stream=True, timeout=20)
         def generate():
@@ -487,24 +469,18 @@ def stream_pdf(token):
 def resend_link():
     data = request.get_json(force=True) or {}
     if data.get("admin_key") != ADMIN_KEY: return jsonify({"success": False, "error": "Unauthorized"}), 401
-    
     email = (data.get("email") or "").strip()
     drive_link = (data.get("drive_link") or "").strip()
     book_title = (data.get("book_title") or "").strip()
-    
     if not email or not drive_link: return jsonify({"success": False, "error": "Missing data"}), 400
-    
     token = str(uuid.uuid4())
     expires_at = (datetime.now(timezone.utc) + timedelta(hours=48)).isoformat()
     download_url = f"{BACKEND_URL}/download/{token}"
-    
     saved = fb_set(f"tokens/{token}", {
         "email": email, "drive_link": drive_link, "book_title": book_title,
         "created_at": datetime.now(timezone.utc).isoformat(), "expires_at": expires_at, "used": False
     })
-    
     if not saved: return jsonify({"success": False, "error": "Firebase unavailable"}), 503
-    
     send_email_via_gas(email, "ক্রেতা", book_title, download_url)
     return jsonify({"success": True, "token": token, "download_url": download_url})
 
