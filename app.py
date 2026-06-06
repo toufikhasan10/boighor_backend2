@@ -300,7 +300,7 @@ def library():
 <body class="p-4">
     <header class="flex justify-between items-center mb-8 pt-4">
         <h1 class="text-2xl font-bold text-amber-500">{{ store }} লাইব্রেরি</h1>
-        <div class="text-xs bg-amber-900/30 text-amber-200 px-3 py-1 rounded-full border border-amber-700">প্রিমিয়াম এক্সেস</div>
+        <div class="text-xs bg-amber-900/30 text-amber-200 px-3 py-1 rounded-full border border-amber-700">প্রিমিয়াম এক্সেস</div>
     </header>
 
     <div id="bookshelf" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4"></div>
@@ -358,7 +358,7 @@ def library():
                 console.error(e);
                 const emptyState = document.getElementById('empty-state');
                 emptyState.classList.remove('hidden');
-                emptyState.innerHTML = '<p class="text-red-400">লাইব্রেরি লোড করা যায়নি।</p>';
+                emptyState.innerHTML = '<p class="text-red-400">লাইব্রেরি লোড করা যায়নি।</p>';
             }
         }
         loadLibrary();
@@ -385,7 +385,7 @@ def download_confirm(token):
     try:
         exp = datetime.fromisoformat(t.get("expires_at", ""))
         if datetime.now(timezone.utc) > exp:
-            return "⌛ মেয়াদ শেষ।", 410
+            return "⌛ মেয়াদ শেষ।", 410
     except Exception:
         pass
 
@@ -494,6 +494,9 @@ def download_confirm(token):
 
                 progress.style.width = '100%';
                 status.innerText = "Success! Redirecting...";
+                // Mark this token as used in Firebase so the link cannot be reused.
+                // This only runs after the EPUB is confirmed saved to IndexedDB.
+                // If this fetch fails, we still proceed to library — non-critical.
                 try {
                     await fetch(`/mark-used/${encodeURIComponent(TOKEN)}`, { method: 'POST' });
                 } catch (markErr) {
@@ -544,6 +547,7 @@ def stream_ebook(token):
         if not first_chunk:
             return "Empty ebook response", 502
 
+        # EPUB is a ZIP file and starts with PK. This prevents saving Drive HTML pages as EPUB.
         if not first_chunk[:4].startswith(b"PK"):
             if first_chunk[:1024].lstrip().startswith(b"<"):
                 return "Google Drive did not return the EPUB file. Set sharing to 'Anyone with the link' and use direct file link.", 502
@@ -563,19 +567,19 @@ def stream_ebook(token):
         print("stream_ebook error:", repr(e), flush=True)
         return "Internal Server Error while streaming ebook", 500
 
-
 @app.route("/mark-used/<token>", methods=["POST"])
 def mark_used(token):
     t = fb_get(f"tokens/{token}")
     if not isinstance(t, dict):
         return jsonify({"ok": False, "reason": "not found"}), 404
     if t.get("used"):
+        # Already marked — idempotent, return success
         return jsonify({"ok": True, "reason": "already marked"})
     fb_set(f"tokens/{token}/used", True)
     fb_set(f"tokens/{token}/used_at", datetime.now(timezone.utc).isoformat())
     return jsonify({"ok": True})
 
-
+# Backward compatibility if old pages call /stream-pdf
 @app.route("/stream-pdf/<token>")
 def stream_pdf_backward_compat(token):
     return stream_ebook(token)
@@ -593,6 +597,7 @@ def reader():
     <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
     <title>ইবুক রিডার — {{ store }}</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/epubjs@0.3.93/dist/epub.min.js"></script>
     <style>
         html, body { margin: 0; padding: 0; height: 100%; background: #1a1a1a; color: #eee; overflow: hidden; }
@@ -634,12 +639,13 @@ def reader():
 
         function showError(message) {
             pageInfo.innerText = 'Error';
+            const isLibraryLoadError = /JSZip|EPUB reader library|CDN/i.test(message || '');
             viewer.innerHTML = `
                 <div style="margin:70px 16px 0; padding:20px; border:1px solid #7f1d1d; background:rgba(127,29,29,.25); border-radius:16px; text-align:center;">
                     <div style="font-size:42px; margin-bottom:10px;">⚠️</div>
                     <h2 style="font-weight:700; color:#fca5a5; margin-bottom:8px;">বইটি খোলা যাচ্ছে না</h2>
                     <p style="font-size:14px; color:#d4d4d8; margin-bottom:16px;">${escapeHtml(message)}</p>
-                    <button onclick="deleteBadBook()" style="padding:10px 14px; background:#dc2626; color:white; border:0; border-radius:10px;">লাইব্রেরি থেকে মুছে আবার Import করুন</button>
+                    ${isLibraryLoadError ? '<button onclick="location.reload()" style="padding:10px 14px; background:#d97706; color:white; border:0; border-radius:10px;">আবার চেষ্টা করুন</button><p style="font-size:12px; color:#fca5a5; margin-top:12px;">এটা reader library loading error — বই ডিলিট করবেন না।</p>' : '<button onclick="deleteBadBook()" style="padding:10px 14px; background:#dc2626; color:white; border:0; border-radius:10px;">লাইব্রেরি থেকে মুছে আবার Import করুন</button>'}
                     <a href="/library" style="display:block; margin-top:16px; color:#f59e0b; font-size:14px;">লাইব্রেরিতে ফিরুন</a>
                 </div>`;
         }
@@ -682,6 +688,7 @@ def reader():
         async function initReader() {
             try {
                 if (!token) throw new Error('Token missing.');
+                if (!window.JSZip) throw new Error('JSZip lib not loaded. Internet/CDN blocked হতে পারে।');
                 if (!window.ePub) throw new Error('EPUB reader library did not load. Internet/CDN blocked হতে পারে।');
 
                 const db = await openDB();
@@ -692,7 +699,7 @@ def reader():
                     req.onerror = () => reject(req.error);
                 });
 
-                if (!savedBook) throw new Error('বইটি এই ডিভাইসের লাইব্রেরিতে পাওয়া যায়নি।');
+                if (!savedBook) throw new Error('বইটি এই ডিভাইসের লাইব্রেরিতে পাওয়া যায়নি।');
                 if (!savedBook.blob || typeof savedBook.blob.arrayBuffer !== 'function') throw new Error('Saved book data corrupted.');
 
                 titleEl.innerText = savedBook.title || 'ইবুক';
@@ -735,6 +742,7 @@ def reader():
                 prevBtn.onclick = () => rendition.prev();
                 nextBtn.onclick = () => rendition.next();
 
+                // Tap left/right side for navigation
                 viewer.addEventListener('click', (e) => {
                     if (!rendition) return;
                     if (e.clientX < window.innerWidth * 0.35) rendition.prev();
