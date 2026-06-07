@@ -143,11 +143,10 @@ def open_drive_file_response(url):
     return first
 
 # ══════════════════════════════════════════════════════════════
-# Purchase / Restore Helpers  (NEW)
+# Purchase / Restore Helpers
 # ══════════════════════════════════════════════════════════════
 
 def safe_email(email):
-    """Convert email to a Firebase-safe path segment."""
     return (email.lower().strip()
             .replace("@", "_at_")
             .replace(".", "_dot_")
@@ -156,9 +155,8 @@ def safe_email(email):
 
 
 def save_purchase_record(email, book_title, drive_link, buyer_name, book_id=""):
-    """Write a purchase record to purchases/{safe_email}/{uuid12}."""
     se  = safe_email(email)
-    key = uuid.uuid4().hex[:12]   # always unique — supports repeat purchases
+    key = uuid.uuid4().hex[:12]
     fb_set(f"purchases/{se}/{key}", {
         "book_title":    book_title or "ইবুক",
         "drive_link":    drive_link,
@@ -192,7 +190,6 @@ def send_email_via_gas(to_email, buyer_name, book_title, download_url):
 
 
 def send_otp_via_gas(to_email, otp):
-    """Send OTP by reusing the existing GAS sendEmail action."""
     if not GAS_URL:
         return False
     try:
@@ -216,6 +213,527 @@ def absolute_backend_url():
     return request.url_root.rstrip("/")
 
 # ══════════════════════════════════════════════════════════════
+# Service Worker  (NEW — fixes offline PWA)
+# ══════════════════════════════════════════════════════════════
+
+SW_JS = r"""
+/* ═══════════════════════════════════════
+   Boighor Service Worker v4
+   ─ Cache shell on install
+   ─ Serve from cache when offline
+   ─ Update cache in background
+═══════════════════════════════════════ */
+const CACHE = 'boighor-v4';
+const SHELL = ['/library', '/reader', '/manifest.json'];
+
+self.addEventListener('install', e => {
+  e.waitUntil(
+    caches.open(CACHE).then(c =>
+      Promise.allSettled(SHELL.map(u => c.add(u).catch(() => null)))
+    )
+  );
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', e => {
+  e.waitUntil(
+    caches.keys().then(ks =>
+      Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))
+    )
+  );
+  self.clients.claim();
+});
+
+self.addEventListener('fetch', e => {
+  if (e.request.method !== 'GET') return;
+  const url = new URL(e.request.url);
+  const skip = ['/stream-','/download/','/admin/','/request-','/verify-','/mark-','/health','/sw.js'];
+  if (skip.some(p => url.pathname.startsWith(p))) return;
+
+  /* Reader page — ignore query params, serve cached shell */
+  if (url.pathname === '/reader') {
+    e.respondWith(
+      caches.match('/reader').then(cached => {
+        fetch('/reader').then(r => {
+          if (r.ok) caches.open(CACHE).then(c => c.put('/reader', r));
+        }).catch(() => {});
+        return cached || fetch(e.request);
+      })
+    );
+    return;
+  }
+
+  /* Everything else — cache-first, refresh in background */
+  e.respondWith(
+    caches.open(CACHE).then(cache =>
+      cache.match(e.request).then(cached => {
+        const net = fetch(e.request).then(res => {
+          if (res.ok) cache.put(e.request, res.clone());
+          return res;
+        }).catch(() => null);
+        return cached || net;
+      })
+    )
+  );
+});
+"""
+
+# ══════════════════════════════════════════════════════════════
+# Library HTML  (REDESIGNED — last-read, gradients, skeleton)
+# ══════════════════════════════════════════════════════════════
+
+LIBRARY_HTML = """
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{ store }} — আমার লাইব্রেরি</title>
+<link rel="manifest" href="/manifest.json">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+Bengali:wght@700;900&display=swap" rel="stylesheet">
+<style>
+:root{--acc:#b8741a;--acc-l:#d4973b;--dark:#0c0c0c;--card:#161616;--card2:#1e1e1e;--bdr:#252525;--sub:#666;--tx:#e0e0e0;}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--dark);color:var(--tx);font-family:'Segoe UI',sans-serif;min-height:100vh}
+
+/* ── HEADER ── */
+.hdr{background:linear-gradient(160deg,#0c0c0c 0%,#1a1005 60%,#0c0c0c 100%);
+  padding:env(safe-area-inset-top,0) 0 0;position:relative;overflow:hidden}
+.hdr::after{content:'';position:absolute;inset:0;
+  background:radial-gradient(ellipse 60% 80% at 30% 60%,rgba(184,116,26,.18) 0%,transparent 70%);
+  pointer-events:none}
+.hdr-inner{max-width:480px;margin:0 auto;padding:20px 16px 20px;position:relative;z-index:1}
+.hdr-top{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px}
+.logo{font-family:'Noto Serif Bengali',serif;font-size:28px;font-weight:900;color:var(--acc);line-height:1}
+.logo-sub{font-size:11px;color:var(--sub);margin-top:2px;font-family:'Segoe UI',sans-serif}
+.hdr-actions{display:flex;gap:8px}
+.hdr-btn{padding:8px 13px;border-radius:20px;border:1px solid rgba(255,255,255,.1);
+  background:rgba(255,255,255,.04);color:#a0a0a0;font-size:12px;font-weight:600;
+  cursor:pointer;transition:all .2s;display:flex;align-items:center;gap:5px;white-space:nowrap}
+.hdr-btn:active{border-color:var(--acc);color:var(--acc)}
+
+/* ── LAST READ ── */
+.lr-wrap{max-width:480px;margin:0 auto;padding:16px 14px 0}
+.lr-card{background:var(--card);border:1px solid var(--bdr);border-radius:16px;
+  padding:14px;display:flex;gap:14px;align-items:center;cursor:pointer;
+  transition:transform .2s,box-shadow .2s;border-left:3px solid var(--acc);
+  box-shadow:0 2px 16px rgba(184,116,26,.08)}
+.lr-card:active{transform:scale(.98)}
+.lr-cover{width:50px;height:68px;border-radius:8px;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;font-size:22px;
+  box-shadow:0 4px 14px rgba(0,0,0,.4)}
+.lr-info{flex:1;min-width:0}
+.lr-badge{font-size:9px;color:var(--acc);font-weight:800;text-transform:uppercase;
+  letter-spacing:.06em;margin-bottom:4px}
+.lr-title{font-size:14px;font-weight:700;color:var(--tx);margin-bottom:6px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lr-bar{height:3px;background:rgba(255,255,255,.1);border-radius:2px;margin-bottom:4px}
+.lr-fill{height:100%;background:var(--acc);border-radius:2px;transition:width .5s}
+.lr-pct{font-size:10px;color:var(--sub)}
+.lr-arrow{color:var(--acc);font-size:20px;flex-shrink:0;opacity:.7}
+.lr-section-title{font-size:11px;color:var(--sub);font-weight:600;
+  text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px}
+
+/* ── SECTION ── */
+.sec{max-width:480px;margin:0 auto;padding:20px 14px 0}
+.sec-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.sec-title{font-size:15px;font-weight:700;color:var(--tx)}
+.sec-count{font-size:12px;color:var(--sub)}
+
+/* ── GRID ── */
+.bk-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+
+/* ── BOOK CARD ── */
+.bk{background:var(--card);border:1px solid var(--bdr);border-radius:14px;
+  overflow:hidden;cursor:pointer;transition:transform .2s,box-shadow .2s}
+.bk:active{transform:scale(.97)}
+.bk-cov{position:relative;padding-bottom:148%;overflow:hidden}
+.bk-cov-in{position:absolute;inset:0;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;padding:14px;text-align:center}
+.bk-cov-emoji{font-size:34px;margin-bottom:8px;filter:drop-shadow(0 2px 6px rgba(0,0,0,.4))}
+.bk-cov-title{font-size:11px;font-weight:700;color:rgba(255,255,255,.88);
+  line-height:1.45;overflow:hidden;display:-webkit-box;
+  -webkit-line-clamp:3;-webkit-box-orient:vertical}
+.bk-prog{height:2px;background:rgba(255,255,255,.12)}
+.bk-prog-fill{height:100%;background:rgba(255,255,255,.65);transition:width .4s}
+.bk-foot{padding:10px 11px 12px}
+.bk-name{font-size:12.5px;font-weight:700;color:var(--tx);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;margin-bottom:2px}
+.bk-meta{font-size:10px;color:var(--sub)}
+
+/* ── SKELETON ── */
+@keyframes sk{from{background-position:-300px 0}to{background-position:300px 0}}
+.sk-card{border-radius:14px;height:210px;
+  background:linear-gradient(90deg,var(--card) 0%,#242424 50%,var(--card) 100%);
+  background-size:600px 100%;animation:sk 1.5s infinite}
+
+/* ── EMPTY ── */
+#emptyWrap{display:none;text-align:center;padding:72px 24px;max-width:300px;margin:0 auto}
+.em-icon{font-size:64px;margin-bottom:18px}
+.em-title{font-size:18px;font-weight:700;color:var(--tx);margin-bottom:8px}
+.em-sub{font-size:13px;color:var(--sub);margin-bottom:28px;line-height:1.7}
+.em-btn{display:inline-flex;align-items:center;gap:8px;padding:13px 26px;
+  background:var(--acc);color:#fff;border:none;border-radius:12px;
+  font-size:14px;font-weight:700;cursor:pointer;transition:background .2s;
+  box-shadow:0 4px 16px rgba(184,116,26,.3)}
+.em-btn:active{background:var(--acc-l)}
+
+/* ── RESTORE MODAL ── */
+#rModal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:50;
+  align-items:flex-end}
+#rModal.open{display:flex}
+.r-sheet{background:#111;width:100%;border-radius:22px 22px 0 0;
+  padding:0 0 env(safe-area-inset-bottom,0);max-height:88vh;overflow-y:auto}
+.r-drag{width:36px;height:4px;background:var(--bdr);border-radius:2px;margin:12px auto 0}
+.r-hd{display:flex;align-items:center;justify-content:space-between;padding:12px 18px 14px}
+.r-hd-title{font-size:16px;font-weight:700;color:var(--tx)}
+.r-x{width:30px;height:30px;border-radius:50%;background:rgba(255,255,255,.07);
+  border:none;color:var(--sub);font-size:14px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center}
+.r-body{padding:0 18px 24px}
+.r-inp{width:100%;background:#1a1a1a;border:1.5px solid var(--bdr);border-radius:12px;
+  padding:13px 15px;color:var(--tx);font-size:14px;margin-bottom:14px;
+  outline:none;transition:border .2s}
+.r-inp:focus{border-color:var(--acc)}
+.r-btn{width:100%;padding:13px;background:var(--acc);color:#fff;border:none;
+  border-radius:12px;font-size:14px;font-weight:700;cursor:pointer;transition:background .2s}
+.r-btn:active{background:var(--acc-l)}
+.r-msg{font-size:13px;margin-top:10px;text-align:center;display:none}
+.r-back{width:100%;padding:9px;color:var(--sub);font-size:13px;
+  background:none;border:none;cursor:pointer;margin-top:4px}
+.r-book-row{display:flex;align-items:center;justify-content:space-between;
+  padding:12px;background:#1a1a1a;border-radius:10px;margin-bottom:8px}
+
+.bottom-spacer{height:24px}
+</style>
+</head>
+<body>
+
+<!-- ── HEADER ──────────────────────────────────── -->
+<div class="hdr">
+  <div class="hdr-inner">
+    <div class="hdr-top">
+      <div>
+        <div class="logo">{{ store }}</div>
+        <div class="logo-sub">আপনার প্রিমিয়াম লাইব্রেরি</div>
+      </div>
+      <div class="hdr-actions">
+        <button class="hdr-btn" onclick="openRestore()">🔄 Restore</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── LAST READ ──────────────────────────────── -->
+<div id="lastReadWrap" class="lr-wrap" style="display:none">
+  <div class="lr-section-title">আগের পাঠ</div>
+  <div class="lr-card" id="lastReadCard">
+    <div class="lr-cover" id="lrCover">📖</div>
+    <div class="lr-info">
+      <div class="lr-badge">📌 সর্বশেষ পড়া</div>
+      <div class="lr-title" id="lrTitle">—</div>
+      <div class="lr-bar"><div class="lr-fill" id="lrFill" style="width:0%"></div></div>
+      <div class="lr-pct" id="lrPct">0% পড়া হয়েছে</div>
+    </div>
+    <div class="lr-arrow">›</div>
+  </div>
+</div>
+
+<!-- ── BOOK SHELF ─────────────────────────────── -->
+<div class="sec" id="shelfSection" style="display:none">
+  <div class="sec-hd">
+    <span class="sec-title">আমার সংগ্রহ</span>
+    <span class="sec-count" id="bookCount"></span>
+  </div>
+  <div class="bk-grid" id="shelf"></div>
+</div>
+
+<!-- ── SKELETON ──────────────────────────────── -->
+<div class="sec" id="skelWrap">
+  <div class="bk-grid">
+    <div class="sk-card"></div><div class="sk-card"></div>
+    <div class="sk-card"></div><div class="sk-card"></div>
+  </div>
+</div>
+
+<!-- ── EMPTY STATE ────────────────────────────── -->
+<div id="emptyWrap">
+  <div class="em-icon">📚</div>
+  <div class="em-title">লাইব্রেরি খালি</div>
+  <div class="em-sub">আপনি এখনো কোনো বই ডাউনলোড করেননি।<br>আগে কিনে থাকলে Restore করুন।</div>
+  <button class="em-btn" onclick="openRestore()">🔄 লাইব্রেরি Restore করুন</button>
+</div>
+
+<!-- ── RESTORE MODAL ──────────────────────────── -->
+<div id="rModal">
+  <div class="r-sheet">
+    <div class="r-drag"></div>
+    <div class="r-hd">
+      <span class="r-hd-title">লাইব্রেরি Restore করুন</span>
+      <button class="r-x" onclick="closeRestore()">✕</button>
+    </div>
+    <div class="r-body">
+      <!-- Step 1 -->
+      <div id="rs1">
+        <p style="font-size:13px;color:var(--sub);margin-bottom:14px">কেনার সময়ের ইমেইল দিন। OTP পাঠানো হবে।</p>
+        <input id="rEmail" class="r-inp" type="email" placeholder="আপনার ইমেইল..."
+          onkeydown="if(event.key==='Enter')doOTP()">
+        <button class="r-btn" onclick="doOTP()">OTP পাঠান</button>
+        <p id="rs1msg" class="r-msg"></p>
+      </div>
+      <!-- Step 2 -->
+      <div id="rs2" style="display:none">
+        <p style="font-size:13px;color:var(--sub);margin-bottom:4px">ইমেইলে পাঠানো ৬ সংখ্যার কোড লিখুন।</p>
+        <p id="rs2email" style="font-size:12px;color:var(--acc);margin-bottom:14px"></p>
+        <input id="rOTP" class="r-inp" type="number" placeholder="123456"
+          style="font-size:22px;letter-spacing:.2em;text-align:center"
+          oninput="if(this.value.length>6)this.value=this.value.slice(0,6)"
+          onkeydown="if(event.key==='Enter')doVerify()">
+        <button class="r-btn" onclick="doVerify()">নিশ্চিত করুন</button>
+        <button class="r-back" onclick="backStep1()">← ইমেইল পরিবর্তন</button>
+        <p id="rs2msg" class="r-msg"></p>
+      </div>
+      <!-- Step 3 -->
+      <div id="rs3" style="display:none">
+        <p style="font-size:13px;color:var(--sub);margin-bottom:12px">বইসমূহ নামানো হচ্ছে…</p>
+        <div id="rList"></div>
+        <div id="rDone" style="display:none;text-align:center;padding:20px 0">
+          <div style="font-size:40px;margin-bottom:8px">✅</div>
+          <p style="color:#4ade80;font-weight:700">সফলভাবে Restore হয়েছে!</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="bottom-spacer"></div>
+
+<script>
+const DB='BoighorDB', OSK='books';
+const LAST_KEY='boighor_lastread';
+const POS_KEY=t=>`boighor_pos_${t}`;
+let rEmail='', rBooks=[];
+
+/* ── Cover gradient system ─────────────────── */
+const COVER_G=[
+  {g:'linear-gradient(145deg,#2c1a08,#8a5210)',e:'📖'},
+  {g:'linear-gradient(145deg,#0d1f12,#2d6a4f)',e:'🌿'},
+  {g:'linear-gradient(145deg,#0a1628,#1a3a5c)',e:'🌊'},
+  {g:'linear-gradient(145deg,#1a0a2e,#4a1a7e)',e:'✨'},
+  {g:'linear-gradient(145deg,#1a0a0a,#6b1a1a)',e:'🔥'},
+  {g:'linear-gradient(145deg,#0a1a1a,#0a5c5c)',e:'💎'},
+  {g:'linear-gradient(145deg,#1a1a0a,#4a4a12)',e:'🌙'},
+  {g:'linear-gradient(145deg,#14091a,#5c1a4a)',e:'🌹'},
+];
+function coverFor(k){
+  let h=0;for(const c of (k||''))h=((h<<5)-h+c.charCodeAt(0))|0;
+  return COVER_G[Math.abs(h)%COVER_G.length];
+}
+function esc(s){return String(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+/* ── IndexedDB ──────────────────────────────── */
+async function openDB(){
+  return new Promise((res,rej)=>{
+    const q=indexedDB.open(DB,1);
+    q.onupgradeneeded=e=>{const d=e.target.result;if(!d.objectStoreNames.contains(OSK))d.createObjectStore(OSK,{keyPath:'token'});};
+    q.onsuccess=()=>res(q.result);q.onerror=()=>rej(q.error);
+  });
+}
+
+/* ── Last Read ──────────────────────────────── */
+function loadLastRead(books){
+  try{
+    const lr=JSON.parse(localStorage.getItem(LAST_KEY)||'null');
+    if(!lr||!lr.token)return;
+    const book=books.find(b=>b.token===lr.token);
+    if(!book)return;
+    // get saved position
+    const pos=JSON.parse(localStorage.getItem(POS_KEY(lr.token))||'null');
+    const pct=pos?pos.pct:(lr.pct||0);
+    const cov=coverFor(lr.token);
+    document.getElementById('lrCover').style.background=cov.g;
+    document.getElementById('lrCover').textContent=cov.e;
+    document.getElementById('lrTitle').textContent=lr.title||book.title||'ইবুক';
+    document.getElementById('lrFill').style.width=pct+'%';
+    document.getElementById('lrPct').textContent=pct+'% পড়া হয়েছে';
+    document.getElementById('lastReadCard').onclick=()=>{
+      window.location.href=`/reader?token=${encodeURIComponent(lr.token)}`;
+    };
+    document.getElementById('lastReadWrap').style.display='block';
+  }catch(e){console.error(e);}
+}
+
+/* ── Render library ─────────────────────────── */
+async function loadLibrary(){
+  document.getElementById('skelWrap').style.display='block';
+  try{
+    const db=await openDB();
+    const books=await new Promise((res,rej)=>{
+      const tx=db.transaction(OSK,'readonly');
+      const q=tx.objectStore(OSK).getAll();
+      q.onsuccess=()=>res(q.result||[]);q.onerror=()=>rej(q.error);
+    });
+
+    document.getElementById('skelWrap').style.display='none';
+
+    if(!books.length){
+      document.getElementById('emptyWrap').style.display='block';
+      return;
+    }
+
+    // Last read
+    loadLastRead(books);
+
+    // Shelf
+    const shelf=document.getElementById('shelf');
+    shelf.innerHTML='';
+    books.forEach(b=>{
+      const cov=coverFor(b.token);
+      const pos=JSON.parse(localStorage.getItem(POS_KEY(b.token))||'null');
+      const pct=pos?Math.min(100,pos.pct):0;
+      const card=document.createElement('div');
+      card.className='bk';
+      card.innerHTML=`
+        <div class="bk-cov">
+          <div class="bk-cov-in" style="background:${cov.g}">
+            <div class="bk-cov-emoji">${cov.e}</div>
+            <div class="bk-cov-title">${esc(b.title||'ইবুক')}</div>
+          </div>
+        </div>
+        <div class="bk-prog"><div class="bk-prog-fill" style="width:${pct}%"></div></div>
+        <div class="bk-foot">
+          <div class="bk-name">${esc(b.title||'ইবুক')}</div>
+          <div class="bk-meta">${pct>0?pct+'% পড়া হয়েছে':'এখনো শুরু হয়নি'}</div>
+        </div>`;
+      card.onclick=()=>{window.location.href=`/reader?token=${encodeURIComponent(b.token)}`;};
+      shelf.appendChild(card);
+    });
+
+    document.getElementById('bookCount').textContent=books.length+' টি বই';
+    document.getElementById('shelfSection').style.display='block';
+  }catch(e){
+    console.error(e);
+    document.getElementById('skelWrap').style.display='none';
+    document.getElementById('emptyWrap').style.display='block';
+  }
+}
+
+/* ── Restore modal ──────────────────────────── */
+function openRestore(){document.getElementById('rModal').classList.add('open');}
+function closeRestore(){document.getElementById('rModal').classList.remove('open');}
+function msg(id,text,err){
+  const el=document.getElementById(id);
+  el.textContent=text;
+  el.style.color=err?'#f87171':'#f59e0b';
+  el.style.display='block';
+}
+function backStep1(){
+  document.getElementById('rs2').style.display='none';
+  document.getElementById('rs1').style.display='block';
+  document.getElementById('rs1msg').style.display='none';
+}
+window.openRestore=openRestore;window.closeRestore=closeRestore;window.backStep1=backStep1;
+
+async function doOTP(){
+  const email=(document.getElementById('rEmail').value||'').trim();
+  if(!email)return;
+  rEmail=email;msg('rs1msg','⏳ পাঠানো হচ্ছে…',false);
+  try{
+    const r=await fetch('/request-restore-otp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email})});
+    const d=await r.json();
+    if(d.success){
+      document.getElementById('rs1').style.display='none';
+      document.getElementById('rs2email').textContent='ইমেইল: '+rEmail;
+      document.getElementById('rs2').style.display='block';
+    }else{msg('rs1msg',d.error||'ত্রুটি হয়েছে।',true);}
+  }catch(_){msg('rs1msg','ইন্টারনেট সংযোগ পরীক্ষা করুন।',true);}
+}
+window.doOTP=doOTP;
+
+async function doVerify(){
+  const otp=(document.getElementById('rOTP').value||'').trim();
+  if(otp.length!==6){msg('rs2msg','৬ সংখ্যার কোড দিন।',true);return;}
+  msg('rs2msg','⏳ যাচাই করা হচ্ছে…',false);
+  try{
+    const r=await fetch('/verify-restore-otp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:rEmail,otp})});
+    const d=await r.json();
+    if(d.success&&d.books&&d.books.length){
+      rBooks=d.books;
+      document.getElementById('rs2').style.display='none';
+      buildRestoreList();
+      document.getElementById('rs3').style.display='block';
+      downloadAll();
+    }else if(d.success){msg('rs2msg','কোনো বইয়ের তথ্য পাওয়া যায়নি।',true);}
+    else{msg('rs2msg',d.error||'OTP ভুল বা মেয়াদ শেষ।',true);}
+  }catch(_){msg('rs2msg','ইন্টারনেট সংযোগ পরীক্ষা করুন।',true);}
+}
+window.doVerify=doVerify;
+
+function buildRestoreList(){
+  const list=document.getElementById('rList');
+  list.innerHTML='';
+  rBooks.forEach((b,i)=>{
+    const row=document.createElement('div');
+    row.className='r-book-row';
+    row.innerHTML=`<span style="font-size:13px;color:var(--tx);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:8px">${esc(b.title||'ইবুক')}</span>
+      <span id="rs_${i}" style="font-size:11px;color:var(--sub);white-space:nowrap">অপেক্ষা…</span>`;
+    list.appendChild(row);
+  });
+}
+
+async function downloadAll(){
+  const db=await openDB();
+  for(let i=0;i<rBooks.length;i++){
+    const b=rBooks[i];
+    const st=document.getElementById(`rs_${i}`);
+    if(!st)continue;
+    try{
+      st.textContent='⬇️ শুরু…';st.style.color='#f59e0b';
+      const resp=await fetch(`/stream-ebook/${encodeURIComponent(b.token)}`,{cache:'no-store'});
+      if(!resp.ok)throw new Error(`HTTP ${resp.status}`);
+      const rdr=resp.body.getReader();
+      const cl=+(resp.headers.get('Content-Length')||0);
+      let recv=0,chunks=[];
+      while(true){
+        const{done,value}=await rdr.read();
+        if(done)break;
+        chunks.push(value);recv+=value.length;
+        st.textContent=cl?Math.round(recv/cl*100)+'%':Math.round(recv/1024)+' KB';
+      }
+      const blob=new Blob(chunks,{type:'application/epub+zip'});
+      const hd=new Uint8Array(await blob.slice(0,4).arrayBuffer());
+      if(!(hd[0]===0x50&&hd[1]===0x4B))throw new Error('Invalid EPUB');
+      st.textContent='💾 সেভ হচ্ছে…';
+      await new Promise((res,rej)=>{
+        const tx=db.transaction(OSK,'readwrite');
+        tx.objectStore(OSK).put({token:b.token,title:b.title,format:'epub',blob:blob,added_at:new Date().toISOString()});
+        tx.oncomplete=res;tx.onerror=()=>rej(tx.error);
+      });
+      try{await fetch(`/mark-used/${encodeURIComponent(b.token)}`,{method:'POST'});}catch(_){}
+      st.textContent='✅';st.style.color='#4ade80';
+    }catch(e){
+      console.error(e);
+      st.textContent='❌ ব্যর্থ';st.style.color='#f87171';
+    }
+  }
+  document.getElementById('rDone').style.display='block';
+  setTimeout(()=>{closeRestore();loadLibrary();},1800);
+}
+
+/* ── SW registration ────────────────────────── */
+if('serviceWorker' in navigator){
+  window.addEventListener('load',()=>{
+    navigator.serviceWorker.register('/sw.js').catch(()=>{});
+  });
+}
+
+loadLibrary();
+</script>
+</body>
+</html>
+"""
+
+# ══════════════════════════════════════════════════════════════
 # Basic Routes
 # ══════════════════════════════════════════════════════════════
 
@@ -231,7 +749,7 @@ def manifest():
         "short_name":       STORE_NAME,
         "start_url":        "/library",
         "display":          "standalone",
-        "background_color": "#1a1a1a",
+        "background_color": "#0c0c0c",
         "theme_color":      "#b8741a",
         "icons": [{"src": "https://cdn-icons-png.flaticon.com/512/3389/3389037.png",
                    "sizes": "512x512", "type": "image/png"}],
@@ -290,7 +808,6 @@ def issue_token():
     if not saved:
         return jsonify({"success": False, "error": "Firebase Error", "retry": True}), 503
 
-    # NEW: persist purchase so the buyer can restore later
     save_purchase_record(email, book_title or "ইবুক", drive_link, buyer_name, book_id)
 
     email_sent = send_email_via_gas(email, buyer_name, book_title or "ইবুক", download_url)
@@ -327,7 +844,7 @@ def resend_link():
     return jsonify({"success": True, "token": token, "download_url": download_url})
 
 # ══════════════════════════════════════════════════════════════
-# Restore OTP Routes  (NEW)
+# Restore OTP Routes
 # ══════════════════════════════════════════════════════════════
 
 @app.route("/request-restore-otp", methods=["POST", "OPTIONS"])
@@ -379,7 +896,7 @@ def verify_restore_otp():
     except Exception:
         pass
 
-    fb_delete(f"otp/{se}")  # one-time use
+    fb_delete(f"otp/{se}")
 
     purchases = fb_get(f"purchases/{se}")
     if not purchases or not isinstance(purchases, dict):
@@ -414,262 +931,8 @@ def verify_restore_otp():
     return jsonify({"success": True, "books": books_out})
 
 # ══════════════════════════════════════════════════════════════
-# Library  (UPDATED — restore modal)
+# Library Route
 # ══════════════════════════════════════════════════════════════
-
-LIBRARY_HTML = """
-<!DOCTYPE html>
-<html lang="bn">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>আমার লাইব্রেরি — {{ store }}</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<link rel="manifest" href="/manifest.json">
-<style>
-  body { background:#121212; color:#e0e0e0; font-family:'Segoe UI',sans-serif; }
-  .book-card { transition:transform .2s; cursor:pointer; }
-  .book-card:active { transform:scale(.95); }
-</style>
-</head>
-<body class="p-4">
-
-<header class="flex justify-between items-center mb-8 pt-4">
-  <h1 class="text-2xl font-bold text-amber-500">{{ store }} লাইব্রেরি</h1>
-  <div class="text-xs bg-amber-900/30 text-amber-200 px-3 py-1 rounded-full border border-amber-700">প্রিমিয়াম</div>
-</header>
-
-<div id="bookshelf" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4"></div>
-
-<div id="empty-state" class="hidden text-center py-16">
-  <div class="text-5xl mb-4">📚</div>
-  <p class="text-zinc-500 mb-6">আপনার লাইব্রেরিতে এখনো কোনো বই নেই।</p>
-  <button onclick="openRestore()"
-    class="px-6 py-3 bg-amber-600 hover:bg-amber-500 text-white rounded-xl font-semibold text-sm transition-colors">
-    🔄 Restore করুন
-  </button>
-  <p class="text-xs text-zinc-600 mt-3">আগে কিনে থাকলে ইমেইল দিয়ে Restore করুন</p>
-</div>
-
-<!-- ══ Restore Modal ══════════════════════════════════════════ -->
-<div id="rModal" class="hidden fixed inset-0 bg-black/80 z-50 flex items-end">
-  <div class="bg-zinc-900 w-full rounded-t-2xl p-6 max-h-[90vh] overflow-y-auto">
-
-    <div class="w-10 h-1 bg-zinc-700 rounded-full mx-auto mb-4"></div>
-    <div class="flex justify-between items-center mb-5">
-      <h2 class="text-lg font-bold text-white">লাইব্রেরি Restore করুন</h2>
-      <button onclick="closeRestore()" class="text-zinc-400 text-2xl leading-none">✕</button>
-    </div>
-
-    <!-- Step 1 -->
-    <div id="rs1">
-      <p class="text-sm text-zinc-400 mb-4">কেনার সময় যে ইমেইল দিয়েছিলেন সেটি দিন। OTP পাঠানো হবে।</p>
-      <input id="rEmail" type="email" placeholder="আপনার ইমেইল..."
-        class="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white text-sm mb-4 outline-none focus:border-amber-500"
-        onkeydown="if(event.key==='Enter')doOTP()">
-      <button onclick="doOTP()"
-        class="w-full py-3 bg-amber-600 hover:bg-amber-500 text-white rounded-xl font-semibold text-sm transition-colors">
-        OTP পাঠান
-      </button>
-      <p id="rs1msg" class="text-sm mt-3 text-center hidden"></p>
-    </div>
-
-    <!-- Step 2 -->
-    <div id="rs2" class="hidden">
-      <p class="text-sm text-zinc-400 mb-1">ইমেইলে পাঠানো ৬ সংখ্যার কোডটি লিখুন।</p>
-      <p id="rs2email" class="text-xs text-amber-400 mb-4"></p>
-      <input id="rOTP" type="number" placeholder="123456"
-        class="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white text-2xl tracking-widest text-center mb-4 outline-none focus:border-amber-500"
-        oninput="if(this.value.length>6)this.value=this.value.slice(0,6)"
-        onkeydown="if(event.key==='Enter')doVerify()">
-      <button onclick="doVerify()"
-        class="w-full py-3 bg-amber-600 hover:bg-amber-500 text-white rounded-xl font-semibold text-sm transition-colors">
-        নিশ্চিত করুন
-      </button>
-      <button onclick="backStep1()" class="w-full py-2 text-zinc-500 text-sm mt-2">← ইমেইল পরিবর্তন</button>
-      <p id="rs2msg" class="text-sm mt-3 text-center hidden"></p>
-    </div>
-
-    <!-- Step 3 -->
-    <div id="rs3" class="hidden">
-      <p class="text-sm text-zinc-400 mb-4">আপনার কেনা বইসমূহ নামানো হচ্ছে…</p>
-      <div id="rList" class="space-y-2 mb-4"></div>
-      <div id="rDone" class="hidden text-center py-4">
-        <div class="text-4xl mb-2">✅</div>
-        <p class="text-green-400 font-semibold">সফলভাবে Restore হয়েছে!</p>
-      </div>
-    </div>
-
-  </div>
-</div>
-
-<script>
-const DB   = 'BoighorDB';
-const OSK  = 'books';
-let rEmail = '';
-let rBooks = [];
-
-function esc(s) {
-  return String(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-}
-
-/* ─ IndexedDB ───────────────────────────────────────────── */
-async function openDB() {
-  return new Promise((res,rej)=>{
-    const q=indexedDB.open(DB,1);
-    q.onupgradeneeded=e=>{const d=e.target.result;if(!d.objectStoreNames.contains(OSK))d.createObjectStore(OSK,{keyPath:'token'});};
-    q.onsuccess=()=>res(q.result); q.onerror=()=>rej(q.error);
-  });
-}
-
-/* ─ Library loader ──────────────────────────────────────── */
-async function loadLibrary() {
-  try {
-    const db=await openDB();
-    const books=await new Promise((res,rej)=>{
-      const tx=db.transaction(OSK,'readonly');
-      const q=tx.objectStore(OSK).getAll();
-      q.onsuccess=()=>res(q.result||[]); q.onerror=()=>rej(q.error);
-    });
-    const shelf=document.getElementById('bookshelf');
-    const empty=document.getElementById('empty-state');
-    shelf.innerHTML='';
-    if(!books.length){empty.classList.remove('hidden');return;}
-    empty.classList.add('hidden');
-    books.forEach(b=>{
-      const d=document.createElement('div');
-      d.className='book-card bg-zinc-900 p-3 rounded-xl border border-zinc-800 text-center';
-      d.innerHTML=`<div class="aspect-[3/4] bg-zinc-800 rounded-lg mb-3 flex items-center justify-center text-3xl shadow-inner">📘</div>
-        <div class="text-sm font-medium truncate">${esc(b.title||'ইবুক')}</div>`;
-      d.onclick=()=>{window.location.href=`/reader?token=${encodeURIComponent(b.token)}`;};
-      shelf.appendChild(d);
-    });
-  } catch(e) {
-    console.error(e);
-    const empty=document.getElementById('empty-state');
-    empty.classList.remove('hidden');
-    empty.innerHTML='<p class="text-red-400">লাইব্রেরি লোড করা যায়নি।</p>';
-  }
-}
-
-/* ─ Modal helpers ───────────────────────────────────────── */
-function openRestore()  {document.getElementById('rModal').classList.remove('hidden');}
-function closeRestore() {document.getElementById('rModal').classList.add('hidden');}
-window.openRestore=openRestore; window.closeRestore=closeRestore;
-
-function msg(id,text,err){
-  const el=document.getElementById(id);
-  el.innerText=text; el.className=`text-sm mt-3 text-center ${err?'text-red-400':'text-amber-400'}`;
-  el.classList.remove('hidden');
-}
-function backStep1(){
-  document.getElementById('rs2').classList.add('hidden');
-  document.getElementById('rs1').classList.remove('hidden');
-  document.getElementById('rs1msg').classList.add('hidden');
-}
-window.backStep1=backStep1;
-
-/* ─ Step 1 : request OTP ────────────────────────────────── */
-async function doOTP(){
-  const email=(document.getElementById('rEmail').value||'').trim();
-  if(!email)return;
-  rEmail=email; msg('rs1msg','⏳ পাঠানো হচ্ছে…',false);
-  try{
-    const r=await fetch('/request-restore-otp',{
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({email}),
-    });
-    const d=await r.json();
-    if(d.success){
-      document.getElementById('rs1').classList.add('hidden');
-      document.getElementById('rs2email').innerText=`ইমেইল: ${rEmail}`;
-      document.getElementById('rs2').classList.remove('hidden');
-    } else { msg('rs1msg',d.error||'ত্রুটি হয়েছে।',true); }
-  } catch(_){ msg('rs1msg','ইন্টারনেট সংযোগ পরীক্ষা করুন।',true); }
-}
-window.doOTP=doOTP;
-
-/* ─ Step 2 : verify OTP ─────────────────────────────────── */
-async function doVerify(){
-  const otp=(document.getElementById('rOTP').value||'').trim();
-  if(otp.length!==6){msg('rs2msg','৬ সংখ্যার কোড দিন।',true);return;}
-  msg('rs2msg','⏳ যাচাই করা হচ্ছে…',false);
-  try{
-    const r=await fetch('/verify-restore-otp',{
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({email:rEmail,otp}),
-    });
-    const d=await r.json();
-    if(d.success&&d.books&&d.books.length){
-      rBooks=d.books;
-      document.getElementById('rs2').classList.add('hidden');
-      buildList(); document.getElementById('rs3').classList.remove('hidden');
-      downloadAll();
-    } else if(d.success){
-      msg('rs2msg','কোনো বইয়ের তথ্য পাওয়া যায়নি।',true);
-    } else { msg('rs2msg',d.error||'OTP ভুল বা মেয়াদ শেষ।',true); }
-  } catch(_){ msg('rs2msg','ইন্টারনেট সংযোগ পরীক্ষা করুন।',true); }
-}
-window.doVerify=doVerify;
-
-function buildList(){
-  const list=document.getElementById('rList');
-  list.innerHTML='';
-  rBooks.forEach((b,i)=>{
-    const d=document.createElement('div');
-    d.className='flex justify-between items-center p-3 bg-zinc-800 rounded-xl';
-    d.innerHTML=`<span class="text-sm text-zinc-200 truncate flex-1 pr-3">${esc(b.title||'ইবুক')}</span>
-      <span id="rs_${i}" class="text-xs text-zinc-500 whitespace-nowrap">অপেক্ষা…</span>`;
-    list.appendChild(d);
-  });
-}
-
-/* ─ Step 3 : download each book inline ──────────────────── */
-async function downloadAll(){
-  const db=await openDB();
-  for(let i=0;i<rBooks.length;i++){
-    const b=rBooks[i];
-    const st=document.getElementById(`rs_${i}`);
-    if(!st)continue;
-    try{
-      st.innerText='⬇️ শুরু…'; st.className='text-xs text-amber-400 whitespace-nowrap';
-      const resp=await fetch(`/stream-ebook/${encodeURIComponent(b.token)}`,{cache:'no-store'});
-      if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const rdr=resp.body.getReader();
-      const cl=+(resp.headers.get('Content-Length')||0);
-      let recv=0,chunks=[];
-      while(true){
-        const{done,value}=await rdr.read();
-        if(done)break;
-        chunks.push(value); recv+=value.length;
-        st.innerText=cl?Math.round(recv/cl*100)+'%':Math.round(recv/1024)+' KB';
-      }
-      const blob=new Blob(chunks,{type:'application/epub+zip'});
-      const hd=new Uint8Array(await blob.slice(0,4).arrayBuffer());
-      if(!(hd[0]===0x50&&hd[1]===0x4B)) throw new Error('Invalid EPUB');
-      st.innerText='💾 সেভ হচ্ছে…';
-      await new Promise((res,rej)=>{
-        const tx=db.transaction(OSK,'readwrite');
-        tx.objectStore(OSK).put({token:b.token,title:b.title,format:'epub',blob:blob,added_at:new Date().toISOString()});
-        tx.oncomplete=res; tx.onerror=()=>rej(tx.error);
-      });
-      try{await fetch(`/mark-used/${encodeURIComponent(b.token)}`,{method:'POST'});}catch(_){}
-      st.innerText='✅ সেভ হয়েছে'; st.className='text-xs text-green-400 whitespace-nowrap';
-    } catch(e){
-      console.error(e);
-      st.innerText='❌ ব্যর্থ'; st.className='text-xs text-red-400 whitespace-nowrap';
-    }
-  }
-  document.getElementById('rDone').classList.remove('hidden');
-  setTimeout(()=>{closeRestore();loadLibrary();},1500);
-}
-
-loadLibrary();
-</script>
-</body>
-</html>
-"""
-
 
 @app.route("/library")
 def library():
@@ -703,33 +966,49 @@ def download_confirm(token):
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>বইটি সংগ্রহ করা হচ্ছে — {{ store }}</title>
-<script src="https://cdn.tailwindcss.com"></script>
 <style>
-@keyframes pc{0%,100%{opacity:1}50%{opacity:.5}}
-.apc{animation:pc 2s cubic-bezier(.4,0,.6,1) infinite}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0c0c0c;color:#e0e0e0;font-family:'Segoe UI',sans-serif;
+  display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px}
+.card{text-align:center;max-width:340px;width:100%}
+.icon{font-size:56px;margin-bottom:20px;animation:bounce 1.2s ease-in-out infinite}
+@keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+h1{font-size:20px;font-weight:700;margin-bottom:6px;color:#f0f0f0}
+p{font-size:13px;color:#777;margin-bottom:20px;line-height:1.6}
+.bar-wrap{background:#1e1e1e;border-radius:8px;height:6px;overflow:hidden;margin-bottom:8px}
+#prog{background:linear-gradient(90deg,#b8741a,#d4973b);height:100%;width:0;transition:width .3s;border-radius:8px}
+#stat{font-size:12px;color:#666;font-weight:600;letter-spacing:.04em}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+.pulsing{animation:pulse 1.8s ease-in-out infinite}
+#retry{display:none;margin-top:20px;padding:11px 22px;background:#b8741a;color:#fff;
+  border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer}
 </style>
 </head>
-<body class="bg-zinc-950 text-white flex items-center justify-center min-h-screen p-6">
-<div class="text-center max-w-sm">
-  <div class="text-6xl mb-6 animate-bounce">📥</div>
-  <h1 class="text-2xl font-bold mb-2">{{ title }}</h1>
-  <p class="text-zinc-400 mb-8">আপনার লাইব্রেরিতে EPUB বইটি সেভ করা হচ্ছে। অনুগ্রহ করে অপেক্ষা করুন…</p>
-  <div class="w-full bg-zinc-800 h-2 rounded-full overflow-hidden mb-4">
-    <div id="prog" class="bg-amber-500 h-full w-0 transition-all duration-300"></div>
-  </div>
-  <div id="stat" class="text-xs text-zinc-500 uppercase tracking-widest apc">Connecting to secure stream...</div>
-  <button id="retry" class="hidden mt-6 px-4 py-2 bg-amber-600 rounded-lg text-white" onclick="location.reload()">আবার চেষ্টা করুন</button>
+<body>
+<div class="card">
+  <div class="icon">📥</div>
+  <h1>{{ title }}</h1>
+  <p>বইটি আপনার ডিভাইসে সংরক্ষণ করা হচ্ছে।<br>একটু অপেক্ষা করুন…</p>
+  <div class="bar-wrap"><div id="prog"></div></div>
+  <div id="stat" class="pulsing">সংযোগ স্থাপন হচ্ছে...</div>
+  <button id="retry" onclick="location.reload()">🔄 আবার চেষ্টা করুন</button>
 </div>
 <script>
-const TOKEN={{ token|tojson }};
-const TITLE={{ title|tojson }};
-function fail(m){const s=document.getElementById('stat');s.innerText=m;s.classList.add('text-red-500');document.getElementById('retry').classList.remove('hidden');}
+const TOKEN={{ token|tojson }}, TITLE={{ title|tojson }};
+const msgs=[
+  'সংযোগ স্থাপন হচ্ছে...','বইটি নামানো শুরু হয়েছে...','একটু সময় লাগছে, ধৈর্য রাখুন...',
+  'এই মুহূর্তে আপনার বইটি নামানো হচ্ছে...','প্রায় হয়ে গেল...',
+];
+let mi=0;
+const stat=document.getElementById('stat');
+const mt=setInterval(()=>{mi=(mi+1)%msgs.length;stat.textContent=msgs[mi];},2200);
+function fail(m){clearInterval(mt);stat.textContent=m;stat.classList.remove('pulsing');stat.style.color='#f87171';document.getElementById('retry').style.display='inline-block';}
 async function run(){
-  const prog=document.getElementById('prog'),stat=document.getElementById('stat');
+  const prog=document.getElementById('prog');
   try{
-    stat.innerText="Downloading secure EPUB...";
+    stat.textContent='বইটি নামানো শুরু হয়েছে...';
     const resp=await fetch(`/stream-ebook/${encodeURIComponent(TOKEN)}`,{cache:'no-store'});
-    if(!resp.ok){const t=await resp.text().catch(()=>'');throw new Error(t||`Stream failed (${resp.status})`);}
+    if(!resp.ok){const t=await resp.text().catch(()=>'');throw new Error(t||`ত্রুটি (${resp.status})`);}
     const rdr=resp.body.getReader();
     const cl=+(resp.headers.get('Content-Length')||0);
     let recv=0,chunks=[];
@@ -737,13 +1016,13 @@ async function run(){
       const{done,value}=await rdr.read();
       if(done)break;
       chunks.push(value);recv+=value.length;
-      if(cl){const p=Math.min(100,Math.round(recv/cl*100));prog.style.width=p+'%';stat.innerText=`Downloading: ${p}%`;}
-      else{prog.style.width='60%';stat.innerText=`Downloading: ${Math.round(recv/1024)} KB`;}
+      if(cl){const p=Math.min(100,Math.round(recv/cl*100));prog.style.width=p+'%';}
+      else{prog.style.width='55%';}
     }
     const blob=new Blob(chunks,{type:'application/epub+zip'});
     const hd=new Uint8Array(await blob.slice(0,4).arrayBuffer());
-    if(!(hd[0]===0x50&&hd[1]===0x4B)) throw new Error('Downloaded file is not a valid EPUB. Google Drive link/share setting check করুন।');
-    prog.style.width='90%';stat.innerText="Saving to library...";
+    if(!(hd[0]===0x50&&hd[1]===0x4B))throw new Error('বইটি সঠিক ফরম্যাটে নেই। Drive শেয়ার সেটিং পরীক্ষা করুন।');
+    prog.style.width='88%';stat.textContent='লাইব্রেরিতে সেভ হচ্ছে...';
     const db=await new Promise((res,rej)=>{
       const q=indexedDB.open('BoighorDB',1);
       q.onupgradeneeded=e=>{const d=e.target.result;if(!d.objectStoreNames.contains('books'))d.createObjectStore('books',{keyPath:'token'});};
@@ -752,12 +1031,12 @@ async function run(){
     await new Promise((res,rej)=>{
       const tx=db.transaction('books','readwrite');
       tx.objectStore('books').put({token:TOKEN,title:TITLE,format:'epub',blob:blob,added_at:new Date().toISOString()});
-      tx.oncomplete=res;tx.onerror=()=>rej(tx.error);tx.onabort=()=>rej(tx.error||new Error('IndexedDB save aborted'));
+      tx.oncomplete=res;tx.onerror=()=>rej(tx.error||new Error('Save failed'));
     });
-    prog.style.width='100%';stat.innerText="Success! Redirecting...";
+    prog.style.width='100%';clearInterval(mt);stat.textContent='✅ সফলভাবে সেভ হয়েছে!';stat.style.color='#4ade80';
     try{await fetch(`/mark-used/${encodeURIComponent(TOKEN)}`,{method:'POST'});}catch(_){}
-    setTimeout(()=>{window.location.href='/library';},700);
-  }catch(e){console.error(e);fail(e.message||'Error occurred. Please try again.');}
+    setTimeout(()=>{window.location.href='/library';},900);
+  }catch(e){console.error(e);fail(e.message||'ত্রুটি হয়েছে। পুনরায় চেষ্টা করুন।');}
 }
 run();
 </script>
@@ -832,7 +1111,17 @@ def stream_pdf_backward_compat(token):
     return stream_ebook(token)
 
 # ══════════════════════════════════════════════════════════════
-# EPUB Reader  (UPDATED — Colibrio-like settings panel)
+# EPUB Reader  ── COMPLETELY REDESIGNED
+#   ✅ 1. Continuous full-book scroll (scrolled-doc)
+#   ✅ 2. Default: scroll mode + narrow margin
+#   ✅ 3. Tap to hide/show top & bottom bars
+#   ✅ 4. 8 beautiful themes (dark as default)
+#   ✅ 5. Polished Colibrio-style UI
+#   ✅ 6. Last-read bookmark saved to localStorage
+#   ✅ 7. Friendly rotating Bengali loading messages
+#   ✅ 8. Full offline support via SW
+#   ✅ 9. Position + settings auto-saved per book, restored on re-open
+#   ✅ 10. TOC chapter-jump panel
 # ══════════════════════════════════════════════════════════════
 
 READER_HTML = """
@@ -845,296 +1134,600 @@ READER_HTML = """
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/epubjs@0.3.93/dist/epub.min.js"></script>
 <style>
-/* ── Theme variables ───────────────────────────────────── */
-:root {
-  --bg:#1a1a1a; --bar:#18181b; --bdr:#27272a;
-  --tx:#e5e5e5; --sub:#a1a1aa; --acc:#f59e0b; --ac2:rgba(245,158,11,.15);
+/* ════════════════════════════════════════
+   CSS CUSTOM PROPERTIES  (theme engine)
+════════════════════════════════════════ */
+:root{
+  --bg:#1a1a1a; --cl:#e5e5e5; --ui:#111113; --acc:#f59e0b;
+  --bdr:#282828; --sub:#666; --acc2:rgba(245,158,11,.12);
+  --bar-t:54px; --bar-b:52px;
 }
-[data-theme="light"] {
-  --bg:#f0ece4; --bar:#e4e0d8; --bdr:#d4cfc7;
-  --tx:#1c1c1e; --sub:#6b6b70; --acc:#d97706; --ac2:rgba(217,119,6,.1);
-}
-[data-theme="sepia"] {
-  --bg:#f4e4c1; --bar:#e8d5a8; --bdr:#d4bf94;
-  --tx:#3b2f1e; --sub:#7a6040; --acc:#8b4513; --ac2:rgba(139,69,19,.1);
-}
+/* ── THEMES ── */
+[data-theme="light"]  {--bg:#f5f1eb;--cl:#1c1c1e;--ui:#e9e5de;--acc:#c47c0d;--bdr:#d8d3cb;--sub:#888;--acc2:rgba(196,124,13,.1);}
+[data-theme="sepia"]  {--bg:#f4e4c1;--cl:#3b2f1e;--ui:#e8d5a8;--acc:#8b4513;--bdr:#c8b08c;--sub:#7a6040;--acc2:rgba(139,69,19,.1);}
+[data-theme="forest"] {--bg:#0d1f12;--cl:#c8e6c9;--ui:#091608;--acc:#66bb6a;--bdr:#1e3a21;--sub:#4a7a4d;--acc2:rgba(102,187,106,.1);}
+[data-theme="ocean"]  {--bg:#0a1628;--cl:#b3d9ff;--ui:#060f1c;--acc:#29b6f6;--bdr:#152238;--sub:#3a6080;--acc2:rgba(41,182,246,.1);}
+[data-theme="purple"] {--bg:#1a0a2e;--cl:#e0cfff;--ui:#12061f;--acc:#ba68c8;--bdr:#2e1a4a;--sub:#6a3a80;--acc2:rgba(186,104,200,.1);}
+[data-theme="rose"]   {--bg:#fff0f2;--cl:#2d0f15;--ui:#ffe0e5;--acc:#e53935;--bdr:#f0c0c5;--sub:#a06070;--acc2:rgba(229,57,53,.08);}
+[data-theme="slate"]  {--bg:#1e2937;--cl:#cfd8dc;--ui:#141e29;--acc:#0288d1;--bdr:#2a3a4a;--sub:#4a6070;--acc2:rgba(2,136,209,.1);}
+
+/* ── BASE ── */
 *,*::before,*::after{box-sizing:border-box;}
-html,body{margin:0;padding:0;height:100%;background:var(--bg);color:var(--tx);
-  overflow:hidden;font-family:'Segoe UI',sans-serif;transition:background .25s,color .25s;}
+html,body{margin:0;padding:0;height:100%;background:var(--bg);color:var(--cl);
+  overflow:hidden;font-family:'Segoe UI',sans-serif;
+  transition:background .3s,color .3s;}
 body{user-select:none;-webkit-user-select:none;}
 @media print{body{display:none !important;}}
 
-/* top bar */
-#tBar{position:fixed;top:0;left:0;right:0;height:54px;background:var(--bar);
-  border-bottom:1px solid var(--bdr);display:flex;align-items:center;
-  justify-content:space-between;padding:0 12px;z-index:50;transition:background .25s,border-color .25s;}
-#tBack{color:var(--acc);font-size:13px;font-weight:700;text-decoration:none;
-  display:flex;align-items:center;gap:4px;padding:8px 4px;white-space:nowrap;}
-#tTitle{font-size:12px;color:var(--sub);flex:1;text-align:center;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 8px;}
-#aaBtn{width:36px;height:36px;border-radius:50%;background:var(--ac2);
-  border:1.5px solid var(--acc);color:var(--acc);font-size:13px;font-weight:700;
-  display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;}
-#aaBtn:active{background:rgba(245,158,11,.35);}
+/* ── TOP BAR ── */
+#tBar{
+  position:fixed;top:0;left:0;right:0;height:var(--bar-t);
+  background:var(--ui);border-bottom:1px solid var(--bdr);
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 10px 0 12px;z-index:50;
+  transition:transform .35s cubic-bezier(.4,0,.2,1),background .3s,border-color .3s;
+}
+body.bars-hidden #tBar{transform:translateY(-110%);}
 
-/* viewer */
-#viewer{position:fixed;top:54px;left:0;right:0;bottom:52px;background:var(--bg);}
+/* ── BOTTOM BAR ── */
+#bBar{
+  position:fixed;left:0;right:0;bottom:0;height:var(--bar-b);
+  background:var(--ui);border-top:1px solid var(--bdr);
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 12px;z-index:50;
+  transition:transform .35s cubic-bezier(.4,0,.2,1),background .3s,border-color .3s;
+}
+body.bars-hidden #bBar{transform:translateY(110%);}
 
-/* bottom bar */
-#bBar{position:fixed;left:0;right:0;bottom:0;height:52px;background:var(--bar);
-  border-top:1px solid var(--bdr);display:flex;align-items:center;
-  justify-content:space-between;padding:0 12px;transition:background .25s,border-color .25s;}
-.nb{width:40px;height:40px;border-radius:50%;background:var(--acc);color:#fff;
-  display:flex;align-items:center;justify-content:center;font-size:20px;
-  cursor:pointer;border:none;transition:opacity .2s,transform .1s;flex-shrink:0;}
-.nb:active{transform:scale(.88);} .nb:disabled{opacity:.3;}
-#pgInfo{font-size:11px;color:var(--sub);font-variant-numeric:tabular-nums;
-  letter-spacing:.06em;text-align:center;flex:1;}
+/* ── PROGRESS BAR ── */
+#progBar{
+  position:fixed;top:var(--bar-t);left:0;right:0;height:3px;
+  background:var(--bdr);z-index:49;
+  transition:top .35s cubic-bezier(.4,0,.2,1);
+}
+body.bars-hidden #progBar{top:0;}
+#progFill{height:100%;background:var(--acc);width:0%;transition:width .6s ease;}
 
-/* backdrop */
-#sBd{position:fixed;inset:0;background:rgba(0,0,0,0);z-index:98;
-  pointer-events:none;transition:background .3s;}
-#sBd.on{pointer-events:auto;background:rgba(0,0,0,.65);}
+/* ── VIEWER ── */
+#viewer{
+  position:fixed;
+  top:calc(var(--bar-t) + 3px);
+  left:0;right:0;
+  bottom:var(--bar-b);
+  background:var(--bg);
+  transition:top .35s cubic-bezier(.4,0,.2,1),bottom .35s,background .3s;
+}
+body.bars-hidden #viewer{top:3px;bottom:0;}
+#viewer.scroll-mode{overflow-y:auto !important;-webkit-overflow-scrolling:touch;}
 
-/* settings panel */
-#sP{position:fixed;bottom:0;left:0;right:0;background:var(--bar);
-  border:1px solid var(--bdr);border-bottom:none;border-radius:20px 20px 0 0;
+/* ── LOADING OVERLAY ── */
+#loadOverlay{
+  position:fixed;inset:0;background:var(--bg);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  z-index:200;transition:opacity .4s ease;
+}
+#loadOverlay.fade-out{opacity:0;pointer-events:none;}
+.ld-spinner{
+  width:44px;height:44px;border-radius:50%;
+  border:3px solid var(--bdr);border-top-color:var(--acc);
+  animation:spin 1s linear infinite;margin-bottom:22px;
+}
+@keyframes spin{to{transform:rotate(360deg);}}
+#ldTitle{font-size:15px;font-weight:700;color:var(--cl);margin-bottom:8px;text-align:center;padding:0 24px;}
+#ldMsg{font-size:13px;color:var(--sub);text-align:center;transition:opacity .3s;padding:0 24px;}
+
+/* ── TOP BAR ELEMENTS ── */
+#tBack{
+  color:var(--acc);font-size:13px;font-weight:700;text-decoration:none;
+  padding:8px 6px;white-space:nowrap;flex-shrink:0;display:flex;align-items:center;gap:3px;
+}
+#tTitle{
+  flex:1;font-size:12px;color:var(--sub);text-align:center;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 6px;
+}
+.tbtn{
+  width:34px;height:34px;border-radius:50%;border:1.5px solid var(--bdr);
+  background:var(--acc2);color:var(--acc);font-size:13px;font-weight:700;
+  display:flex;align-items:center;justify-content:center;
+  cursor:pointer;flex-shrink:0;margin-left:5px;transition:background .2s,border-color .2s;
+}
+.tbtn:active{background:rgba(245,158,11,.3);}
+
+/* ── BOTTOM BAR ELEMENTS ── */
+.nb{
+  width:40px;height:40px;border-radius:50%;background:var(--acc);
+  color:#fff;border:none;font-size:22px;
+  display:flex;align-items:center;justify-content:center;
+  cursor:pointer;flex-shrink:0;transition:opacity .2s,transform .1s;
+}
+.nb:active{transform:scale(.88);}
+.nb:disabled{opacity:.3;}
+#pgInfo{flex:1;text-align:center;font-size:12px;color:var(--sub);
+  font-variant-numeric:tabular-nums;letter-spacing:.04em;}
+
+/* ── BACKDROP ── */
+#sBd,#tocBd{
+  position:fixed;inset:0;background:rgba(0,0,0,0);
+  z-index:98;pointer-events:none;transition:background .3s;
+}
+#sBd.on,#tocBd.on{pointer-events:auto;background:rgba(0,0,0,.7);}
+
+/* ── SETTINGS PANEL ── */
+#sPanel{
+  position:fixed;bottom:0;left:0;right:0;
+  background:var(--ui);border:1px solid var(--bdr);border-bottom:none;
+  border-radius:22px 22px 0 0;
   transform:translateY(100%);transition:transform .32s cubic-bezier(.32,.72,0,1);
-  z-index:99;max-height:82vh;overflow-y:auto;}
-#sP.on{transform:translateY(0);}
+  z-index:99;max-height:88vh;overflow-y:auto;
+}
+#sPanel.on{transform:translateY(0);}
+.sp-drag{width:36px;height:4px;background:var(--bdr);border-radius:2px;margin:12px auto 0;}
+.sp-hd{display:flex;align-items:center;justify-content:space-between;padding:10px 16px 12px;}
+.sp-title{font-size:15px;font-weight:700;color:var(--cl);}
+.sp-x{width:28px;height:28px;border-radius:50%;border:none;background:rgba(128,128,128,.15);color:var(--sub);cursor:pointer;font-size:12px;display:flex;align-items:center;justify-content:center;}
+.sp-sec{padding:10px 16px 14px;border-top:1px solid var(--bdr);}
+.sp-lbl{font-size:10px;color:var(--sub);text-transform:uppercase;letter-spacing:.1em;font-weight:700;margin-bottom:10px;}
 
-.sh{width:36px;height:4px;border-radius:2px;background:var(--bdr);margin:12px auto 2px;}
-.shd{display:flex;align-items:center;justify-content:space-between;padding:6px 16px 10px;}
-.sttl{font-size:14px;font-weight:700;color:var(--tx);}
-.sclx{width:28px;height:28px;border-radius:50%;background:rgba(128,128,128,.2);
-  border:none;color:var(--sub);font-size:13px;cursor:pointer;
-  display:flex;align-items:center;justify-content:center;}
-
-.ssec{padding:10px 16px 12px;border-top:1px solid var(--bdr);}
-.slbl{font-size:10px;color:var(--sub);text-transform:uppercase;
-  letter-spacing:.1em;margin-bottom:8px;font-weight:700;}
-
-/* toggle group */
-.tg{display:flex;gap:8px;}
-.tgb{flex:1;padding:9px 10px;border-radius:10px;border:1.5px solid var(--bdr);
+/* Flow buttons */
+.flow-row{display:flex;gap:8px;}
+.flow-btn{flex:1;padding:10px 8px;border:1.5px solid var(--bdr);border-radius:10px;
   background:transparent;color:var(--sub);font-size:12px;cursor:pointer;
   display:flex;align-items:center;justify-content:center;gap:5px;transition:all .2s;}
-.tgb.on{border-color:var(--acc);color:var(--acc);background:var(--ac2);}
+.flow-btn.on{border-color:var(--acc);color:var(--acc);background:var(--acc2);}
 
-/* theme buttons */
-.thg{display:flex;gap:10px;}
-.thb{flex:1;padding:10px 6px;border-radius:12px;border:2px solid var(--bdr);
-  cursor:pointer;display:flex;flex-direction:column;align-items:center;
-  gap:4px;transition:border-color .2s;}
-.thb span{font-size:10px;font-weight:600;}
+/* Theme grid */
+.theme-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;}
+.thb{border:2px solid var(--bdr);border-radius:12px;overflow:hidden;
+  cursor:pointer;transition:border-color .2s;aspect-ratio:1;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:4px;padding:8px 4px;}
 .thb.on{border-color:var(--acc);}
-.th-dk{background:#1a1a1a;color:#e5e5e5;}
-.th-lt{background:#f0ece4;color:#1c1c1e;}
-.th-sp{background:#f4e4c1;color:#3b2f1e;}
+.thb-emoji{font-size:18px;}
+.thb-name{font-size:9px;font-weight:700;text-align:center;line-height:1.2;}
 
-/* step controls */
-.stc{display:flex;align-items:center;gap:10px;}
-.stb{width:38px;height:38px;border-radius:10px;border:1.5px solid var(--bdr);
-  background:transparent;color:var(--tx);font-size:16px;font-weight:700;
-  cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s;}
-.stb:active{background:var(--ac2);border-color:var(--acc);}
-.stv{flex:1;text-align:center;font-size:13px;font-weight:600;color:var(--tx);}
-.spad{height:14px;}
+/* Step controls */
+.step-row{display:flex;align-items:center;gap:10px;}
+.step-btn{width:38px;height:38px;border-radius:10px;border:1.5px solid var(--bdr);
+  background:transparent;color:var(--cl);font-size:15px;font-weight:700;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;
+  transition:all .15s;flex-shrink:0;}
+.step-btn:active{background:var(--acc2);border-color:var(--acc);}
+.step-val{flex:1;text-align:center;font-size:13px;font-weight:600;color:var(--cl);}
+.sp-pad{height:14px;}
+
+/* ── TOC PANEL ── */
+#tocPanel{
+  position:fixed;top:0;right:0;bottom:0;width:min(310px,88vw);
+  background:var(--ui);border-left:1px solid var(--bdr);
+  transform:translateX(110%);transition:transform .3s cubic-bezier(.32,.72,0,1);
+  z-index:99;overflow-y:auto;
+}
+#tocPanel.on{transform:translateX(0);}
+.toc-hd{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:68px 16px 14px;border-bottom:1px solid var(--bdr);
+  position:sticky;top:0;background:var(--ui);
+  backdrop-filter:blur(12px);z-index:1;
+}
+.toc-hd-title{font-size:15px;font-weight:700;color:var(--cl);}
+.toc-item{
+  padding:13px 18px;border-bottom:1px solid rgba(255,255,255,.04);
+  cursor:pointer;transition:background .15s;display:flex;align-items:center;gap:10px;
+}
+.toc-item:hover,.toc-item:active{background:var(--acc2);}
+.toc-dot{width:6px;height:6px;border-radius:50%;background:var(--acc);flex-shrink:0;opacity:.6;}
+.toc-label{font-size:13px;color:var(--cl);line-height:1.5;}
+.toc-sub{padding-left:34px;}
+.toc-empty{padding:28px 18px;font-size:13px;color:var(--sub);text-align:center;}
+
+/* ── RESUME BANNER ── */
+#resumeBanner{
+  position:fixed;bottom:calc(var(--bar-b) + 12px);left:50%;
+  transform:translateX(-50%);
+  background:var(--acc);color:#fff;padding:9px 18px;
+  border-radius:24px;font-size:12px;font-weight:700;
+  z-index:45;display:flex;align-items:center;gap:8px;
+  box-shadow:0 4px 20px rgba(0,0,0,.35);cursor:pointer;
+  animation:slideUp .4s ease;white-space:nowrap;
+}
+@keyframes slideUp{from{opacity:0;transform:translateX(-50%) translateY(20px);}to{opacity:1;transform:translateX(-50%) translateY(0);}}
 </style>
 </head>
-<body data-theme="dark" oncontextmenu="return false;">
+<body oncontextmenu="return false;">
 
+<!-- ── LOADING OVERLAY ──────────────────────── -->
+<div id="loadOverlay">
+  <div class="ld-spinner"></div>
+  <div id="ldTitle">বইঘর</div>
+  <div id="ldMsg">📖 বইটির পাতা খোলা হচ্ছে...</div>
+</div>
+
+<!-- ── TOP BAR ──────────────────────────────── -->
 <div id="tBar">
   <a href="/library" id="tBack">← লাইব্রেরি</a>
-  <div id="tTitle">ইবুক</div>
-  <div id="aaBtn" onclick="openS()">Aa</div>
+  <div id="tTitle">লোড হচ্ছে...</div>
+  <button class="tbtn" onclick="openTOC()" title="অধ্যায়">☰</button>
+  <button class="tbtn" onclick="openSettings()" title="সেটিং">Aa</button>
 </div>
 
+<!-- ── PROGRESS BAR ─────────────────────────── -->
+<div id="progBar"><div id="progFill"></div></div>
+
+<!-- ── VIEWER ────────────────────────────────── -->
 <div id="viewer"></div>
 
+<!-- ── BOTTOM BAR ────────────────────────────── -->
 <div id="bBar">
-  <button id="prev" class="nb">&#8249;</button>
-  <span id="pgInfo">Loading…</span>
-  <button id="next" class="nb">&#8250;</button>
+  <button class="nb" id="prev">&#8249;</button>
+  <span id="pgInfo">⋯</span>
+  <button class="nb" id="next">&#8250;</button>
 </div>
 
-<div id="sBd" onclick="closeS()"></div>
-
-<div id="sP">
-  <div class="sh"></div>
-  <div class="shd">
-    <span class="sttl">পড়ার সেটিং</span>
-    <button class="sclx" onclick="closeS()">&#10005;</button>
+<!-- ── SETTINGS BACKDROP + PANEL ────────────── -->
+<div id="sBd" onclick="closeSettings()"></div>
+<div id="sPanel">
+  <div class="sp-drag"></div>
+  <div class="sp-hd">
+    <span class="sp-title">পড়ার সেটিং</span>
+    <button class="sp-x" onclick="closeSettings()">✕</button>
   </div>
 
-  <div class="ssec">
-    <div class="slbl">পড়ার মোড</div>
-    <div class="tg">
-      <button class="tgb" id="fPg" onclick="setFlow('paginated')">&#128214; পাতায় পাতায়</button>
-      <button class="tgb" id="fSc" onclick="setFlow('scroll')">&#128220; স্ক্রল করে</button>
+  <!-- Flow Mode -->
+  <div class="sp-sec">
+    <div class="sp-lbl">পড়ার মোড</div>
+    <div class="flow-row">
+      <button class="flow-btn" id="fPg" onclick="setFlow('paginated')">📖 পাতায় পাতায়</button>
+      <button class="flow-btn" id="fSc" onclick="setFlow('scroll')">📜 স্ক্রল মোড</button>
     </div>
   </div>
 
-  <div class="ssec">
-    <div class="slbl">থিম</div>
-    <div class="thg">
-      <button class="thb th-dk" id="thDk" onclick="setTheme('dark')">&#127761;<span>ডার্ক</span></button>
-      <button class="thb th-lt" id="thLt" onclick="setTheme('light')">&#9728;&#65039;<span>লাইট</span></button>
-      <button class="thb th-sp" id="thSp" onclick="setTheme('sepia')">&#127807;<span>সেপিয়া</span></button>
+  <!-- Themes -->
+  <div class="sp-sec">
+    <div class="sp-lbl">থিম</div>
+    <div class="theme-grid" id="themeGrid"></div>
+  </div>
+
+  <!-- Font Size -->
+  <div class="sp-sec">
+    <div class="sp-lbl">ফন্ট সাইজ</div>
+    <div class="step-row">
+      <button class="step-btn" onclick="stepFont(-1)" style="font-size:12px">A−</button>
+      <div class="step-val" id="vF">100%</div>
+      <button class="step-btn" onclick="stepFont(1)" style="font-size:18px">A+</button>
     </div>
   </div>
 
-  <div class="ssec">
-    <div class="slbl">ফন্ট সাইজ</div>
-    <div class="stc">
-      <button class="stb" style="font-size:13px" onclick="stepF(-1)">A&#8722;</button>
-      <div class="stv" id="vF">100%</div>
-      <button class="stb" style="font-size:19px" onclick="stepF(1)">A+</button>
+  <!-- Line Spacing -->
+  <div class="sp-sec">
+    <div class="sp-lbl">লাইন স্পেস</div>
+    <div class="step-row">
+      <button class="step-btn" onclick="stepLine(-1)">−</button>
+      <div class="step-val" id="vL">স্বাভাবিক</div>
+      <button class="step-btn" onclick="stepLine(1)">+</button>
     </div>
   </div>
 
-  <div class="ssec">
-    <div class="slbl">লাইন স্পেস</div>
-    <div class="stc">
-      <button class="stb" onclick="stepL(-1)">&#8722;</button>
-      <div class="stv" id="vL">স্বাভাবিক</div>
-      <button class="stb" onclick="stepL(1)">+</button>
+  <!-- Margin -->
+  <div class="sp-sec">
+    <div class="sp-lbl">মার্জিন</div>
+    <div class="step-row">
+      <button class="step-btn" onclick="stepMargin(-1)">◀</button>
+      <div class="step-val" id="vM">সরু</div>
+      <button class="step-btn" onclick="stepMargin(1)">▶</button>
     </div>
   </div>
 
-  <div class="ssec">
-    <div class="slbl">মার্জিন</div>
-    <div class="stc">
-      <button class="stb" onclick="stepM(-1)">&#9664;</button>
-      <div class="stv" id="vM">স্বাভাবিক</div>
-      <button class="stb" onclick="stepM(1)">&#9654;</button>
-    </div>
-  </div>
+  <div class="sp-pad"></div>
+</div>
 
-  <div class="spad"></div>
+<!-- ── TOC BACKDROP + PANEL ──────────────────── -->
+<div id="tocBd" onclick="closeTOC()"></div>
+<div id="tocPanel">
+  <div class="toc-hd">
+    <span class="toc-hd-title">অধ্যায়সমূহ</span>
+    <button class="sp-x" onclick="closeTOC()">✕</button>
+  </div>
+  <div id="tocList"></div>
 </div>
 
 <script>
-/* ── Preference tables ──────────────────────────────────── */
-const PKEY='boighor_prefs';
-const FONTS  =[80,90,100,110,120,140,160];
-const LINES  =[{l:'টাইট',v:1.35},{l:'স্বাভাবিক',v:1.65},{l:'প্রশস্ত',v:1.9},{l:'বেশি',v:2.2}];
-const MARGINS=[{l:'সরু',v:8},{l:'স্বাভাবিক',v:20},{l:'প্রশস্ত',v:38}];
-const ECSS={
-  dark: {bg:'#1a1a1a',cl:'#e5e5e5',lk:'#f59e0b'},
-  light:{bg:'#f0ece4',cl:'#1c1c1e',lk:'#0055cc'},
-  sepia:{bg:'#f4e4c1',cl:'#3b2f1e',lk:'#8b4513'},
+/* ═══════════════════════════════════════════
+   CONFIGURATION
+═══════════════════════════════════════════ */
+const THEMES = {
+  dark:  {bg:'#1a1a1a',cl:'#e5e5e5',lk:'#f59e0b',name:'রাত',emoji:'🌑'},
+  light: {bg:'#f5f1eb',cl:'#1c1c1e',lk:'#0055cc',name:'দিন',emoji:'☀️'},
+  sepia: {bg:'#f4e4c1',cl:'#3b2f1e',lk:'#8b4513',name:'সেপিয়া',emoji:'📜'},
+  forest:{bg:'#0d1f12',cl:'#c8e6c9',lk:'#66bb6a',name:'বন',emoji:'🌿'},
+  ocean: {bg:'#0a1628',cl:'#b3d9ff',lk:'#29b6f6',name:'সমুদ্র',emoji:'🌊'},
+  purple:{bg:'#1a0a2e',cl:'#e0cfff',lk:'#ba68c8',name:'বেগুনি',emoji:'🔮'},
+  rose:  {bg:'#fff0f2',cl:'#2d0f15',lk:'#e53935',name:'গোলাপ',emoji:'🌹'},
+  slate: {bg:'#1e2937',cl:'#cfd8dc',lk:'#0288d1',name:'নীল',emoji:'💙'},
 };
 
-let prefs={theme:'dark',fi:2,li:1,mi:1,flow:'paginated'};
+const FONTS   = [75, 85, 100, 115, 130, 150, 175];
+const LINES   = [{l:'ঘন',v:1.35},{l:'স্বাভাবিক',v:1.65},{l:'প্রশস্ত',v:1.9},{l:'বেশি',v:2.2}];
+const MARGINS = [{l:'সরু',v:6},{l:'মাঝারি',v:20},{l:'প্রশস্ত',v:40}];
 
-function lpref(){
+const PKEY   = 'boighor_prefs';
+const LRKEY  = 'boighor_lastread';
+const posKey = t => `boighor_pos_${t}`;
+
+/* ── Defaults: scroll mode + narrow margin ── */
+let P = {theme:'dark', fi:2, li:1, mi:0, flow:'scroll'};
+
+function loadP(){
   try{
     const s=JSON.parse(localStorage.getItem(PKEY)||'{}');
-    if(s.theme)prefs.theme=s.theme;
-    if(s.fi!==undefined)prefs.fi=s.fi;
-    if(s.li!==undefined)prefs.li=s.li;
-    if(s.mi!==undefined)prefs.mi=s.mi;
-    if(s.flow)prefs.flow=s.flow;
+    if(s.theme&&THEMES[s.theme])P.theme=s.theme;
+    if(s.fi!==undefined)P.fi=+s.fi;
+    if(s.li!==undefined)P.li=+s.li;
+    if(s.mi!==undefined)P.mi=+s.mi;
+    if(s.flow)P.flow=s.flow;
   }catch(_){}
 }
-function spref(){try{localStorage.setItem(PKEY,JSON.stringify(prefs));}catch(_){}}
+function saveP(){try{localStorage.setItem(PKEY,JSON.stringify(P));}catch(_){}}
 
-/* ── DOM refs ───────────────────────────────────────────── */
-const token   =new URLSearchParams(window.location.search).get('token');
-const viewerEl=document.getElementById('viewer');
-const titleEl =document.getElementById('tTitle');
-const pgEl    =document.getElementById('pgInfo');
-const prevBtn =document.getElementById('prev');
-const nextBtn =document.getElementById('next');
-let rend=null, book=null;
+function savePos(cfi,pct){
+  try{localStorage.setItem(posKey(TOKEN),JSON.stringify({cfi,pct,time:Date.now()}));}catch(_){}
+}
+function loadPos(){
+  try{return JSON.parse(localStorage.getItem(posKey(TOKEN))||'null');}catch(_){return null;}
+}
 
-/* ── Apply CSS to epub iframe ───────────────────────────── */
-function applyEpub(){
+/* ── Save last-read ── */
+function saveLastRead(title,pct){
+  try{localStorage.setItem(LRKEY,JSON.stringify({token:TOKEN,title,pct,time:Date.now()}));}catch(_){}
+}
+
+/* ═══════════════════════════════════════════
+   LOADING MESSAGES
+═══════════════════════════════════════════ */
+const LOAD_MSGS=[
+  '📖 বইটির পাতা খোলা হচ্ছে...',
+  '✨ আপনার গল্পের দুনিয়া সাজানো হচ্ছে...',
+  '🕐 একটু সময় নিচ্ছে, ধৈর্য রাখুন...',
+  '📚 অধ্যায়গুলো সাজানো হচ্ছে...',
+  '🌙 পড়ার পরিবেশ তৈরি হচ্ছে...',
+  '🎭 গল্পের মঞ্চ প্রস্তুত হচ্ছে...',
+  '✍️ প্রায় হয়ে গেল...',
+];
+let lmi=0, lTimer=null;
+function startLoadMsgs(){
+  const el=document.getElementById('ldMsg');
+  lTimer=setInterval(()=>{
+    lmi=(lmi+1)%LOAD_MSGS.length;
+    el.style.opacity='0';
+    setTimeout(()=>{el.textContent=LOAD_MSGS[lmi];el.style.opacity='1';},300);
+  },2200);
+}
+function stopLoadMsgs(){if(lTimer){clearInterval(lTimer);lTimer=null;}}
+function hideLoading(){
+  stopLoadMsgs();
+  const ov=document.getElementById('loadOverlay');
+  ov.classList.add('fade-out');
+  setTimeout(()=>{ov.style.display='none';},420);
+}
+
+/* ═══════════════════════════════════════════
+   BARS TOGGLE  (tap content → show/hide)
+═══════════════════════════════════════════ */
+let barsOn=true;
+function toggleBars(){
+  barsOn=!barsOn;
+  document.body.classList.toggle('bars-hidden',!barsOn);
+}
+function showBars(){
+  if(!barsOn){barsOn=true;document.body.classList.remove('bars-hidden');}
+}
+
+/* ═══════════════════════════════════════════
+   THEME APPLICATION
+═══════════════════════════════════════════ */
+function applyTheme(t){
+  document.documentElement.dataset.theme=t;
+  document.body.dataset.theme=t;
+}
+function applyEpubCSS(){
   if(!rend)return;
-  const t=ECSS[prefs.theme]||ECSS.dark;
-  const fs=FONTS[prefs.fi];
-  const lh=LINES[prefs.li].v;
-  const mg=MARGINS[prefs.mi].v;
+  const t=THEMES[P.theme]||THEMES.dark;
+  const fs=FONTS[P.fi];
+  const lh=LINES[P.li].v;
+  const mg=MARGINS[P.mi].v;
   rend.themes.default({
-    body:{'background':t.bg+' !important','color':t.cl+' !important',
+    'html':{'background':t.bg+' !important'},
+    'body':{
+      'background':t.bg+' !important','color':t.cl+' !important',
       'font-size':fs+'% !important','line-height':lh+' !important',
-      'padding':'6px '+mg+'px !important','max-width':'100% !important'},
-    p:{'line-height':lh+' !important','color':t.cl+' !important'},
-    h1:{'color':t.cl+' !important'},h2:{'color':t.cl+' !important'},
-    h3:{'color':t.cl+' !important'},a:{'color':t.lk+' !important'},
-    img:{'max-width':'100% !important','height':'auto !important'},
+      'padding':'8px '+mg+'px !important','max-width':'100% !important',
+      'margin':'0 auto !important',
+    },
+    'p':{'line-height':lh+' !important','color':t.cl+' !important'},
+    'h1,h2,h3,h4,h5,h6':{'color':t.cl+' !important'},
+    'a':{'color':t.lk+' !important'},
+    'img':{'max-width':'100% !important','height':'auto !important'},
   });
 }
 
-/* ── Theme ──────────────────────────────────────────────── */
-function setTheme(t){
-  prefs.theme=t; spref();
-  document.documentElement.dataset.theme=t;
-  document.body.dataset.theme=t;
-  syncUI(); applyEpub();
+function setTheme(k){P.theme=k;saveP();applyTheme(k);applyEpubCSS();syncUI();}
+function stepFont(d){P.fi=Math.max(0,Math.min(FONTS.length-1,P.fi+d));saveP();applyEpubCSS();syncUI();}
+function stepLine(d){P.li=Math.max(0,Math.min(LINES.length-1,P.li+d));saveP();applyEpubCSS();syncUI();}
+function stepMargin(d){P.mi=Math.max(0,Math.min(MARGINS.length-1,P.mi+d));saveP();applyEpubCSS();syncUI();}
+
+window.setTheme=setTheme;window.stepFont=stepFont;window.stepLine=stepLine;window.stepMargin=stepMargin;
+
+/* ═══════════════════════════════════════════
+   BUILD THEME GRID
+═══════════════════════════════════════════ */
+function buildThemeGrid(){
+  const grid=document.getElementById('themeGrid');
+  Object.entries(THEMES).forEach(([k,v])=>{
+    const btn=document.createElement('button');
+    btn.className='thb';btn.id='th_'+k;
+    btn.style.background=v.bg;
+    btn.innerHTML=`<span class="thb-emoji">${v.emoji}</span><span class="thb-name" style="color:${v.cl}">${v.name}</span>`;
+    btn.onclick=()=>setTheme(k);
+    grid.appendChild(btn);
+  });
 }
 
-/* ── Steps ──────────────────────────────────────────────── */
-function stepF(d){prefs.fi=Math.max(0,Math.min(FONTS.length-1,prefs.fi+d));spref();syncUI();applyEpub();}
-function stepL(d){prefs.li=Math.max(0,Math.min(LINES.length-1,prefs.li+d));spref();syncUI();applyEpub();}
-function stepM(d){prefs.mi=Math.max(0,Math.min(MARGINS.length-1,prefs.mi+d));spref();syncUI();applyEpub();}
-window.stepF=stepF;window.stepL=stepL;window.stepM=stepM;
+/* ═══════════════════════════════════════════
+   SYNC UI
+═══════════════════════════════════════════ */
+function syncUI(){
+  document.getElementById('fPg').classList.toggle('on',P.flow==='paginated');
+  document.getElementById('fSc').classList.toggle('on',P.flow==='scroll');
+  document.querySelectorAll('.thb').forEach(e=>e.classList.remove('on'));
+  const te=document.getElementById('th_'+P.theme);if(te)te.classList.add('on');
+  document.getElementById('vF').textContent=FONTS[P.fi]+'%';
+  document.getElementById('vL').textContent=LINES[P.li].l;
+  document.getElementById('vM').textContent=MARGINS[P.mi].l;
+}
 
-/* ── Flow switch ────────────────────────────────────────── */
+/* ═══════════════════════════════════════════
+   SETTINGS PANEL
+═══════════════════════════════════════════ */
+function openSettings(){
+  document.getElementById('sPanel').classList.add('on');
+  document.getElementById('sBd').classList.add('on');
+}
+function closeSettings(){
+  document.getElementById('sPanel').classList.remove('on');
+  document.getElementById('sBd').classList.remove('on');
+}
+window.openSettings=openSettings;window.closeSettings=closeSettings;
+
+/* ═══════════════════════════════════════════
+   FLOW SWITCH
+═══════════════════════════════════════════ */
 async function setFlow(nf){
-  if(prefs.flow===nf||!book)return;
-  prefs.flow=nf; spref(); syncUI();
+  if(P.flow===nf||!book)return;
   let cfi=null;
   try{const loc=rend&&rend.currentLocation();if(loc&&loc.start)cfi=loc.start.cfi;}catch(_){}
-  viewerEl.innerHTML='';
-  if(rend){try{rend.destroy();}catch(_){} rend=null;}
-  const fs=nf==='scroll'?'scrolled-doc':'paginated';
-  rend=book.renderTo('viewer',{width:'100%',height:'100%',spread:'none',flow:fs});
-  applyEpub();
-  await rend.display(cfi||undefined);
-  bindEv();
+  P.flow=nf;saveP();syncUI();
+  document.getElementById('viewer').innerHTML='';
+  if(rend){try{rend.destroy();}catch(_){}rend=null;}
+  await buildRendition(cfi);
 }
 window.setFlow=setFlow;
 
-/* ── Settings open/close ────────────────────────────────── */
-function openS(){document.getElementById('sP').classList.add('on');document.getElementById('sBd').classList.add('on');}
-function closeS(){document.getElementById('sP').classList.remove('on');document.getElementById('sBd').classList.remove('on');}
-window.openS=openS;window.closeS=closeS;
-
-/* ── Sync controls to prefs ─────────────────────────────── */
-function syncUI(){
-  document.getElementById('fPg').classList.toggle('on',prefs.flow==='paginated');
-  document.getElementById('fSc').classList.toggle('on',prefs.flow==='scroll');
-  ['Dk','Lt','Sp'].forEach(n=>document.getElementById('th'+n).classList.remove('on'));
-  const m={dark:'Dk',light:'Lt',sepia:'Sp'};
-  const el=document.getElementById('th'+(m[prefs.theme]||'Dk'));
-  if(el)el.classList.add('on');
-  document.getElementById('vF').innerText=FONTS[prefs.fi]+'%';
-  document.getElementById('vL').innerText=LINES[prefs.li].l;
-  document.getElementById('vM').innerText=MARGINS[prefs.mi].l;
+/* ═══════════════════════════════════════════
+   TOC PANEL
+═══════════════════════════════════════════ */
+function openTOC(){
+  document.getElementById('tocPanel').classList.add('on');
+  document.getElementById('tocBd').classList.add('on');
+  showBars();
 }
-window.setTheme=setTheme;
+function closeTOC(){
+  document.getElementById('tocPanel').classList.remove('on');
+  document.getElementById('tocBd').classList.remove('on');
+}
+window.openTOC=openTOC;window.closeTOC=closeTOC;
 
-/* ── Error UI ───────────────────────────────────────────── */
 function esc(s){return String(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
-function showErr(msg){
-  pgEl.innerText='Error';
-  const cdn=/JSZip|EPUB reader|CDN/i.test(msg||'');
-  viewerEl.innerHTML=`
-    <div style="margin:60px 16px 0;padding:20px;border:1px solid #7f1d1d;background:rgba(127,29,29,.25);border-radius:16px;text-align:center">
-      <div style="font-size:40px;margin-bottom:10px">&#9888;&#65039;</div>
-      <h2 style="font-weight:700;color:#fca5a5;margin-bottom:8px">বইটি খোলা যাচ্ছে না</h2>
-      <p style="font-size:14px;color:#d4d4d8;margin-bottom:16px">${esc(msg)}</p>
-      ${cdn
-        ?`<button onclick="location.reload()" style="padding:10px 14px;background:#d97706;color:#fff;border:0;border-radius:10px">আবার চেষ্টা করুন</button>
-          <p style="font-size:12px;color:#fca5a5;margin-top:12px">CDN loading error — বই ডিলিট করবেন না।</p>`
-        :`<button onclick="delBad()" style="padding:10px 14px;background:#dc2626;color:#fff;border:0;border-radius:10px">মুছে আবার Import করুন</button>`}
-      <a href="/library" style="display:block;margin-top:16px;color:#f59e0b;font-size:14px">লাইব্রেরিতে ফিরুন</a>
+
+async function buildTOC(){
+  const list=document.getElementById('tocList');
+  try{
+    const nav=await book.loaded.navigation;
+    const items=nav.toc||[];
+    if(!items.length){list.innerHTML='<div class="toc-empty">সূচিপত্র পাওয়া যায়নি</div>';return;}
+    renderTOCItems(items,list,0);
+  }catch(e){
+    list.innerHTML='<div class="toc-empty">সূচিপত্র লোড করা যায়নি</div>';
+  }
+}
+function renderTOCItems(items,container,level){
+  items.forEach(item=>{
+    const el=document.createElement('div');
+    el.className='toc-item'+(level>0?' toc-sub':'');
+    el.style.paddingLeft=(18+level*14)+'px';
+    el.innerHTML=`<span class="toc-dot"></span><span class="toc-label">${esc(item.label||'')}</span>`;
+    el.onclick=()=>{if(rend)rend.display(item.href);closeTOC();};
+    container.appendChild(el);
+    if(item.subitems&&item.subitems.length)renderTOCItems(item.subitems,container,level+1);
+  });
+}
+
+/* ═══════════════════════════════════════════
+   PROGRESS / POSITION
+═══════════════════════════════════════════ */
+function onRelocated(loc){
+  if(!loc||!loc.start)return;
+  const pct=loc.start.percentage?Math.round(loc.start.percentage*100):0;
+  document.getElementById('progFill').style.width=pct+'%';
+  document.getElementById('pgInfo').textContent=pct+'%';
+  // Save position + last read
+  if(loc.start.cfi)savePos(loc.start.cfi,pct);
+  try{saveLastRead(document.getElementById('tTitle').textContent,pct);}catch(_){}
+}
+
+/* ═══════════════════════════════════════════
+   BUILD RENDITION
+═══════════════════════════════════════════ */
+let rend=null,book=null;
+const TOKEN=new URLSearchParams(window.location.search).get('token');
+
+async function buildRendition(startCfi){
+  const viewer=document.getElementById('viewer');
+  const isScroll=P.flow==='scroll';
+
+  viewer.classList.toggle('scroll-mode',isScroll);
+
+  /* ── Continuous scroll: scrolled-doc uses ContinuousViewManager ── */
+  const opts={
+    width:'100%',
+    height:'100%',
+    spread:'none',
+    flow: isScroll ? 'scrolled-doc' : 'paginated',
+  };
+
+  rend=book.renderTo('viewer',opts);
+  applyEpubCSS();
+
+  await rend.display(startCfi||undefined);
+
+  // Progress tracking
+  rend.on('relocated', onRelocated);
+
+  // Tap inside epub content → toggle bars
+  rend.on('click', ()=>toggleBars());
+
+  // Prev / Next
+  document.getElementById('prev').onclick=()=>rend.prev();
+  document.getElementById('next').onclick=()=>rend.next();
+
+  // In scroll mode dim nav buttons (chapter-level only)
+  const navOp=isScroll?'0.45':'1';
+  document.getElementById('prev').style.opacity=navOp;
+  document.getElementById('next').style.opacity=navOp;
+}
+
+/* ═══════════════════════════════════════════
+   ERROR
+═══════════════════════════════════════════ */
+function showError(msg){
+  hideLoading();
+  document.getElementById('pgInfo').textContent='';
+  const isCDN=/JSZip|EPUB|CDN/i.test(msg||'');
+  document.getElementById('viewer').innerHTML=`
+    <div style="margin:60px 16px 0;padding:24px;background:rgba(127,29,29,.2);
+      border:1px solid #7f1d1d;border-radius:16px;text-align:center">
+      <div style="font-size:48px;margin-bottom:12px">⚠️</div>
+      <h2 style="color:#fca5a5;margin-bottom:8px;font-weight:700">বইটি খোলা যাচ্ছে না</h2>
+      <p style="color:#d4d4d8;font-size:13px;margin-bottom:18px;line-height:1.65">${esc(msg)}</p>
+      ${isCDN
+        ?`<button onclick="location.reload()" style="padding:10px 22px;background:#d97706;color:#fff;border:0;border-radius:10px;font-size:14px;font-weight:700">🔄 আবার চেষ্টা করুন</button>
+          <p style="font-size:11px;color:#fca5a5;margin-top:10px">বই ডিলিট করবেন না।</p>`
+        :`<button onclick="delBook()" style="padding:10px 22px;background:#dc2626;color:#fff;border:0;border-radius:10px;font-size:14px;font-weight:700">🗑️ মুছে পুনরায় Import করুন</button>`}
+      <br><a href="/library" style="display:inline-block;margin-top:14px;color:var(--acc);font-size:14px">← লাইব্রেরিতে ফিরুন</a>
     </div>`;
 }
 
-/* ── IndexedDB ──────────────────────────────────────────── */
+/* ═══════════════════════════════════════════
+   INDEXEDDB
+═══════════════════════════════════════════ */
 async function openDB(){
   return new Promise((res,rej)=>{
     const q=indexedDB.open('BoighorDB',1);
@@ -1142,79 +1735,98 @@ async function openDB(){
     q.onsuccess=()=>res(q.result);q.onerror=()=>rej(q.error);
   });
 }
-async function delBad(){
-  try{
-    const db=await openDB();
-    await new Promise((res,rej)=>{const tx=db.transaction('books','readwrite');tx.objectStore('books').delete(token);tx.oncomplete=res;tx.onerror=()=>rej(tx.error);});
-  }catch(e){console.error(e);}
+
+async function delBook(){
+  try{const db=await openDB();await new Promise((res,rej)=>{const tx=db.transaction('books','readwrite');tx.objectStore('books').delete(TOKEN);tx.oncomplete=res;tx.onerror=()=>rej(tx.error);});}catch(_){}
   window.location.href='/library';
 }
-window.delBad=delBad;
+window.delBook=delBook;
 
-/* ── Keyboard ───────────────────────────────────────────── */
+/* ═══════════════════════════════════════════
+   KEYBOARD
+═══════════════════════════════════════════ */
 document.addEventListener('keydown',e=>{
   const k=(e.key||'').toLowerCase();
   if(e.ctrlKey&&['p','s','u'].includes(k))e.preventDefault();
   if(e.key==='F12')e.preventDefault();
   if(e.ctrlKey&&e.shiftKey&&['i','j'].includes(k))e.preventDefault();
-  if(e.key==='Escape')closeS();
-  if(e.key==='ArrowLeft' &&rend)rend.prev();
+  if(e.key==='Escape'){closeSettings();closeTOC();}
+  if(e.key==='ArrowLeft'&&rend)rend.prev();
   if(e.key==='ArrowRight'&&rend)rend.next();
 });
 
-/* ── Bind rendition events ──────────────────────────────── */
-function bindEv(){
-  rend.on('relocated',loc=>{
-    if(loc&&loc.start)
-      pgEl.innerText=loc.start.percentage?Math.round(loc.start.percentage*100)+'%':'Reading';
-  });
-  prevBtn.onclick=()=>rend.prev();
-  nextBtn.onclick=()=>rend.next();
-  viewerEl.onclick=e=>{
-    if(!rend||prefs.flow==='scroll')return;
-    if(e.clientX<window.innerWidth*.3)rend.prev();
-    else if(e.clientX>window.innerWidth*.7)rend.next();
-  };
-}
-
-/* ── Init ───────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════
+   MAIN INIT
+═══════════════════════════════════════════ */
 async function init(){
   try{
-    if(!token)      throw new Error('Token missing.');
-    if(!window.JSZip)throw new Error('JSZip lib not loaded. Internet/CDN blocked হতে পারে।');
-    if(!window.ePub) throw new Error('EPUB reader library did not load. Internet/CDN blocked হতে পারে।');
+    if(!TOKEN)throw new Error('Token নেই। সঠিক লিংক ব্যবহার করুন।');
+    if(!window.JSZip)throw new Error('JSZip লোড হয়নি। ইন্টারনেট/CDN সমস্যা।');
+    if(!window.ePub)throw new Error('EPUB লাইব্রেরি লোড হয়নি। ইন্টারনেট/CDN সমস্যা।');
 
-    lpref();
-    document.documentElement.dataset.theme=prefs.theme;
-    document.body.dataset.theme=prefs.theme;
+    loadP();
+    applyTheme(P.theme);
+    buildThemeGrid();
     syncUI();
+    startLoadMsgs();
 
+    // Load from IndexedDB
     const db=await openDB();
     const saved=await new Promise((res,rej)=>{
       const tx=db.transaction('books','readonly');
-      const q=tx.objectStore('books').get(token);
+      const q=tx.objectStore('books').get(TOKEN);
       q.onsuccess=()=>res(q.result);q.onerror=()=>rej(q.error);
     });
 
-    if(!saved)throw new Error('বইটি এই ডিভাইসের লাইব্রেরিতে পাওয়া যায়নি।');
-    if(!saved.blob||typeof saved.blob.arrayBuffer!=='function')throw new Error('Saved book data corrupted.');
+    if(!saved)throw new Error('বইটি এই ডিভাইসে পাওয়া যায়নি। পুনরায় ডাউনলোড করুন।');
+    if(!saved.blob||typeof saved.blob.arrayBuffer!=='function')throw new Error('বইয়ের ডেটা নষ্ট। মুছে পুনরায় Download করুন।');
 
-    titleEl.innerText=saved.title||'ইবুক';
+    const title=saved.title||'ইবুক';
+    document.getElementById('tTitle').textContent=title;
+    document.getElementById('ldTitle').textContent=title;
+    document.title=title+' — বইঘর';
+
     const ab=await saved.blob.arrayBuffer();
-    if(!ab||ab.byteLength<10)throw new Error('Saved EPUB is empty.');
+    if(!ab||ab.byteLength<10)throw new Error('বইটি খালি বা নষ্ট।');
     const hd=new Uint8Array(ab.slice(0,4));
-    if(!(hd[0]===0x50&&hd[1]===0x4B))
-      throw new Error('Saved file is not an EPUB. পুরোনো ভুল import মুছে আবার import করুন।');
+    if(!(hd[0]===0x50&&hd[1]===0x4B))throw new Error('বইটি সঠিক EPUB ফরম্যাটে নেই।');
 
     book=ePub(ab);
-    const fls=prefs.flow==='scroll'?'scrolled-doc':'paginated';
-    rend=book.renderTo('viewer',{width:'100%',height:'100%',spread:'none',flow:fls});
-    applyEpub();
-    await rend.display();
-    pgEl.innerText='Ready';
-    bindEv();
+    buildTOC();
 
-  }catch(e){console.error(e);showErr(e.message||'Unknown EPUB reader error.');}
+    // Restore saved position
+    const savedPos=loadPos();
+
+    await buildRendition(savedPos&&savedPos.cfi?savedPos.cfi:null);
+
+    hideLoading();
+
+    // Show resume banner if meaningful progress exists
+    if(savedPos&&savedPos.pct>2){
+      showResumeBanner(savedPos.pct,savedPos.cfi);
+    }
+
+  }catch(e){
+    console.error(e);
+    showError(e.message||'অজানা ত্রুটি হয়েছে।');
+  }
+}
+
+/* ── Resume banner ────────────────────────── */
+function showResumeBanner(pct,cfi){
+  const b=document.createElement('div');
+  b.id='resumeBanner';
+  b.innerHTML=`📌 আপনি ${pct}% পর্যন্ত পড়েছিলেন &nbsp;·&nbsp; ট্যাপ করুন`;
+  b.onclick=()=>{if(rend&&cfi)rend.display(cfi);b.remove();};
+  document.body.appendChild(b);
+  setTimeout(()=>{if(b.parentNode)b.remove();},6000);
+}
+
+/* ── SW Registration ──────────────────────── */
+if('serviceWorker' in navigator){
+  window.addEventListener('load',()=>{
+    navigator.serviceWorker.register('/sw.js').catch(()=>{});
+  });
 }
 
 window.addEventListener('resize',()=>{if(rend)rend.resize();});
@@ -1224,10 +1836,22 @@ init();
 </html>
 """
 
+# ══════════════════════════════════════════════════════════════
+# Reader Route
+# ══════════════════════════════════════════════════════════════
 
 @app.route("/reader")
 def reader():
     return render_template_string(READER_HTML, store=STORE_NAME)
+
+# ══════════════════════════════════════════════════════════════
+# Service Worker Route  (NEW — enables offline PWA)
+# ══════════════════════════════════════════════════════════════
+
+@app.route("/sw.js")
+def service_worker():
+    return Response(SW_JS, mimetype="application/javascript",
+                    headers={"Service-Worker-Allowed": "/"})
 
 
 if __name__ == "__main__":
