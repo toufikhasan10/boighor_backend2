@@ -337,19 +337,16 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  // /library and everything else: network-first, cache fallback
+  // /library and everything else: cache-first + background update
   e.respondWith(
-    fetch(e.request).then(res => {
-      if (res.ok && res.status < 300)
-        caches.open(CACHE_V).then(c => c.put(e.request, res.clone()));
-      return res;
-    }).catch(() =>
-      caches.match(e.request).then(hit =>
-        hit || caches.match('/library').then(lib =>
-          lib || new Response(OFFLINE_HTML, { headers: { 'Content-Type': 'text/html;charset=utf-8' } })
-        )
-      )
-    )
+    caches.match(e.request).then(cached => {
+      const networkFetch = fetch(e.request).then(res => {
+        if (res.ok && res.status < 300)
+          caches.open(CACHE_V).then(c => c.put(e.request, res.clone()));
+        return res;
+      }).catch(() => cached || new Response(OFFLINE_HTML, { headers: { 'Content-Type': 'text/html;charset=utf-8' } }));
+      return cached || networkFetch;
+    })
   );
 });
 """
@@ -1096,27 +1093,40 @@ const stat = document.getElementById('stat');
 
 /* PWA Install prompt */
 let deferredPrompt = null;
+let downloadStarted = false;
+
+function startDownload() {
+  if(downloadStarted) return;
+  downloadStarted = true;
+  run();
+}
+
 window.addEventListener('beforeinstallprompt', e => {
   e.preventDefault();
   deferredPrompt = e;
-  const btn = document.getElementById('installBtn');
-  if(btn) btn.innerText = '📲 ইনস্টল ও বই ডাউনলোড করুন';
+  // auto-trigger install prompt immediately (page opened by user click)
+  deferredPrompt.prompt();
+  deferredPrompt.userChoice
+    .then(() => { deferredPrompt = null; })
+    .catch(() => { deferredPrompt = null; });
 });
+
 async function doInstall() {
   if(deferredPrompt) {
     deferredPrompt.prompt();
-    const res = await deferredPrompt.userChoice.catch(()=>({}));
-    deferredPrompt = null;
+    deferredPrompt.userChoice.then(() => { deferredPrompt = null; }).catch(() => { deferredPrompt = null; });
   }
-  // Always proceed with download regardless of install choice
   document.getElementById('installCard').style.opacity = '.5';
-  run();
+  startDownload();
 }
+
 window.addEventListener('appinstalled', () => {
   const card = document.getElementById('installCard');
   if(card) { card.style.background = 'rgba(74,222,128,.1)'; card.style.borderColor = 'rgba(74,222,128,.3)'; }
+  const btn = document.getElementById('installBtn');
+  if(btn) btn.innerText = '✅ ইনস্টল সম্পন্ন';
 });
-// Register SW
+
 if('serviceWorker' in navigator)
   navigator.serviceWorker.register('/sw.js',{scope:'/'}).catch(()=>{});
 
@@ -1183,7 +1193,7 @@ async function run() {
 
   } catch(e) { console.error(e); fail(e.message || 'অপ্রত্যাশিত ত্রুটি।'); }
 }
-run();
+startDownload();
 </script>
 </body>
 </html>
@@ -1201,9 +1211,6 @@ def stream_ebook(token):
             return "Token expired", 410
     except Exception:
         pass
-    if t.get("used"):
-        return "এই লিংক আগেই ব্যবহার করা হয়েছে।", 403
-
     drive_link = (t.get("drive_link") or "").strip()
     if not drive_link:
         return "File link not found", 404
@@ -1246,8 +1253,9 @@ def mark_used(token):
         return jsonify({"ok": False, "reason": "not found"}), 404
     if t.get("used"):
         return jsonify({"ok": True, "reason": "already marked"})
-    fb_set(f"tokens/{token}/used", True)
-    fb_set(f"tokens/{token}/used_at", datetime.now(timezone.utc).isoformat())
+    count = (t.get("download_count") or 0) + 1
+    fb_set(f"tokens/{token}/download_count", count)
+    fb_set(f"tokens/{token}/last_used_at", datetime.now(timezone.utc).isoformat())
     return jsonify({"ok": True})
 
 
