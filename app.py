@@ -5,7 +5,29 @@ import uuid
 import random
 import urllib.parse
 import time
+import threading
 from datetime import datetime, timedelta, timezone
+
+# ── In-memory token cache (Firebase timeout fallback) ──────────────────────
+# Firebase মাঝে মাঝে timeout করলেও token এখানে থাকবে।
+# Railway restart হলে cache হারায়, কিন্তু সেটা rare এবং ততক্ষণে Firebase ঠিক হয়ে যায়।
+_token_mem: dict = {}
+_token_mem_lock = threading.Lock()
+
+def _mem_set(token: str, data: dict) -> None:
+    with _token_mem_lock:
+        _token_mem[token] = {**data, "_cached_at": time.time()}
+
+def _mem_get(token: str) -> dict | None:
+    with _token_mem_lock:
+        entry = _token_mem.get(token)
+    if not entry:
+        return None
+    if time.time() - entry.get("_cached_at", 0) > 7200:  # 2 ঘণ্টা TTL
+        with _token_mem_lock:
+            _token_mem.pop(token, None)
+        return None
+    return entry
 
 import requests
 from flask import Flask, request, jsonify, redirect, Response, render_template_string, stream_with_context
@@ -395,7 +417,7 @@ def issue_token():
     expires_at = (datetime.now(timezone.utc) + timedelta(hours=48)).isoformat()
     download_url = f"{absolute_backend_url()}/download/{token}"
 
-    saved = fb_set(f"tokens/{token}", {
+    token_data = {
         "email":      email,
         "drive_link": drive_link,
         "book_title": book_title or "ইবুক",
@@ -404,21 +426,14 @@ def issue_token():
         "expires_at": expires_at,
         "used":       False,
         "format":     "epub",
-    })
+    }
+    # Memory cache-এ আগে রাখো — Firebase timeout হলেও token কাজ করবে
+    _mem_set(token, token_data)
 
+    saved = fb_set(f"tokens/{token}", token_data)
     if not saved:
-        # Firebase সব retry-র পরেও fail করেছে।
-        # Frontend retry করবে (retry:True দেখে), কিন্তু সেটাও fail করলে
-        # customer যেন খালি হাতে না থাকে — fallback email পাঠাও drive link দিয়ে।
-        print(f"⚠️ Firebase failed after all retries — sending fallback email to {email}", flush=True)
-        # /view URL দিলে "No preview available" দেখাবে — direct download URL বানাও
-        _fid = extract_drive_file_id(drive_link)
-        fallback_url = (f"https://drive.google.com/uc?export=download&id={_fid}"
-                        if _fid else drive_link)
-        fallback_sent = send_email_via_gas(email, buyer_name, book_title or "ইবুক", fallback_url)
-        print(f"📧 Fallback email sent: {fallback_sent}", flush=True)
-        return jsonify({"success": False, "error": "Firebase Error", "retry": True,
-                        "fallback_email_sent": fallback_sent}), 503
+        print(f"⚠️ Firebase save failed — token {token[:8]}... memory cache-এ আছে, চলবে", flush=True)
+    # Firebase fail হোক বা না হোক — সবসময় download_url return করো
 
     save_purchase_record(email, book_title or "ইবুক", drive_link, buyer_name, book_id)
     email_sent = send_email_via_gas(email, buyer_name, book_title or "ইবুক", download_url)
@@ -1022,6 +1037,8 @@ def download_landing(token):
 def download_confirm(token):
     t = fb_get(f"tokens/{token}")
     if t is False or not isinstance(t, dict):
+        t = _mem_get(token)  # Firebase timeout → memory cache check
+    if not isinstance(t, dict):
         return "❌ লিংকটি বৈধ নয়।", 404
     try:
         exp = datetime.fromisoformat(t.get("expires_at", ""))
@@ -1215,6 +1232,8 @@ startDownload();
 def stream_ebook(token):
     t = fb_get(f"tokens/{token}")
     if t is False or not isinstance(t, dict):
+        t = _mem_get(token)  # Firebase timeout → memory cache check
+    if not isinstance(t, dict):
         return "Unauthorized or token not found", 403
     try:
         exp = datetime.fromisoformat(t.get("expires_at", ""))
