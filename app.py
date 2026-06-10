@@ -407,7 +407,18 @@ def issue_token():
     })
 
     if not saved:
-        return jsonify({"success": False, "error": "Firebase Error", "retry": True}), 503
+        # Firebase সব retry-র পরেও fail করেছে।
+        # Frontend retry করবে (retry:True দেখে), কিন্তু সেটাও fail করলে
+        # customer যেন খালি হাতে না থাকে — fallback email পাঠাও drive link দিয়ে।
+        print(f"⚠️ Firebase failed after all retries — sending fallback email to {email}", flush=True)
+        # /view URL দিলে "No preview available" দেখাবে — direct download URL বানাও
+        _fid = extract_drive_file_id(drive_link)
+        fallback_url = (f"https://drive.google.com/uc?export=download&id={_fid}"
+                        if _fid else drive_link)
+        fallback_sent = send_email_via_gas(email, buyer_name, book_title or "ইবুক", fallback_url)
+        print(f"📧 Fallback email sent: {fallback_sent}", flush=True)
+        return jsonify({"success": False, "error": "Firebase Error", "retry": True,
+                        "fallback_email_sent": fallback_sent}), 503
 
     save_purchase_record(email, book_title or "ইবুক", drive_link, buyer_name, book_id)
     email_sent = send_email_via_gas(email, buyer_name, book_title or "ইবুক", download_url)
