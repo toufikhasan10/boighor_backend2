@@ -251,7 +251,7 @@ def manifest():
         "short_name":       STORE_NAME,
         "start_url":        "/library",
         "display":          "standalone",
-        "background_color": "#0d0d0d",
+        "background_color": "#faf3e6",
         "theme_color":      "#b8741a",
         "icons": [{"src": "https://cdn-icons-png.flaticon.com/512/2702/2702134.png",
                    "sizes": "512x512", "type": "image/png"}],
@@ -306,12 +306,12 @@ const OFFLINE_HTML = `<!DOCTYPE html><html lang="bn"><head><meta charset="UTF-8"
 <title>অফলাইন — বইঘর</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:#0d0d0d;color:#e2e2e2;font-family:system-ui,sans-serif;
+body{background:#faf3e6;color:#2b2118;font-family:system-ui,sans-serif;
 display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px}
 .box{text-align:center;max-width:320px}
 .icon{font-size:64px;margin-bottom:20px;display:block}
-h1{font-size:22px;color:#f59e0b;margin-bottom:10px}
-p{color:#888;font-size:14px;line-height:1.6;margin-bottom:20px}
+h1{font-size:22px;color:#b8741a;margin-bottom:10px}
+p{color:#6b6256;font-size:14px;line-height:1.6;margin-bottom:20px}
 a{display:inline-block;padding:12px 24px;background:#f59e0b;color:#000;
 border-radius:14px;text-decoration:none;font-weight:700;font-size:14px}
 </style></head><body>
@@ -568,23 +568,23 @@ LIBRARY_HTML = """
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>আমার লাইব্রেরি — {{ store }}</title>
 <link rel="manifest" href="/manifest.json">
-<meta name="theme-color" content="#1a0e02">
+<meta name="theme-color" content="#faf3e6">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:#0d0d0d;color:#e2e2e2;font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh;padding-bottom:24px}
+body{background:#faf3e6;color:#2b2118;font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh;padding-bottom:24px}
 @media print{body{display:none!important}}
 
 /* Header */
 .lib-hdr{
-  background:linear-gradient(165deg,#1a0e02 0%,#0d0d0d 100%);
+  background:linear-gradient(165deg,#fff7e8 0%,#fdecc8 100%);
   padding:20px 16px 16px;
-  border-bottom:1px solid rgba(245,158,11,.12);
+  border-bottom:1px solid rgba(184,116,26,.22);
   position:sticky;top:0;z-index:30;
 }
 .lib-hdr-inner{display:flex;justify-content:space-between;align-items:center}
-.lib-logo{font-size:22px;font-weight:900;color:#f59e0b;letter-spacing:-.3px}
+.lib-logo{font-size:22px;font-weight:900;color:#b8741a;letter-spacing:-.3px}
 .lib-sub{font-size:11px;color:#52525b;margin-top:2px}
-.lib-badge{font-size:11px;background:rgba(245,158,11,.12);color:#f59e0b;
+.lib-badge{font-size:11px;background:rgba(184,116,26,.12);color:#92400e;
   padding:4px 10px;border-radius:20px;border:1px solid rgba(245,158,11,.22);font-weight:700}
 
 /* Continue reading card */
@@ -607,7 +607,7 @@ body{background:#0d0d0d;color:#e2e2e2;font-family:'Segoe UI',system-ui,sans-seri
 
 /* Book card */
 .bk-card{
-  background:#111;border:1px solid #1e1e1e;border-radius:18px;
+  background:#fff;border:1px solid #f0e2c0;border-radius:18px;
   overflow:hidden;cursor:pointer;position:relative;
   transition:transform .15s,border-color .15s;-webkit-tap-highlight-color:transparent;
 }
@@ -623,7 +623,7 @@ body{background:#0d0d0d;color:#e2e2e2;font-family:'Segoe UI',system-ui,sans-seri
 .bk-prog{position:absolute;bottom:0;left:0;right:0;height:3px;background:rgba(0,0,0,.5)}
 .bk-prog-fill{height:100%;background:#f59e0b;border-radius:0 2px 2px 0;transition:width .5s}
 .bk-info{padding:10px 12px 12px}
-.bk-title{font-size:12.5px;font-weight:600;color:#e4e4e7;line-height:1.35;
+.bk-title{font-size:12.5px;font-weight:600;color:#2b2118;line-height:1.35;
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:34px}
 .bk-pct{font-size:10.5px;margin-top:4px}
 
@@ -637,7 +637,7 @@ body{background:#0d0d0d;color:#e2e2e2;font-family:'Segoe UI',system-ui,sans-seri
 
 /* Skeleton */
 .skel{
-  background:linear-gradient(90deg,#161616 25%,#222 50%,#161616 75%);
+  background:linear-gradient(90deg,#ece1c4 25%,#f6ecd4 50%,#ece1c4 75%);
   background-size:300% 100%;animation:shimmer 1.6s infinite;border-radius:18px;
 }
 @keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
@@ -658,17 +658,17 @@ body{background:#0d0d0d;color:#e2e2e2;font-family:'Segoe UI',system-ui,sans-seri
   display:flex;align-items:flex-end;justify-content:center;
 }
 .modal-box{
-  background:#111;border:1px solid #222;border-radius:24px 24px 0 0;
+  background:#fff;border:1px solid #eee0c4;border-radius:24px 24px 0 0;
   width:100%;max-width:480px;padding:24px;max-height:85vh;overflow-y:auto;
 }
-.modal-handle{width:36px;height:4px;background:#333;border-radius:2px;margin:0 auto 20px}
+.modal-handle{width:36px;height:4px;background:#e0d3b0;border-radius:2px;margin:0 auto 20px}
 input:focus{outline:none}
 
 /* Confirm modal */
 .confirm-modal{
-  background:#111;border:1px solid #222;border-radius:20px;
+  background:#fff;border:1px solid #eee0c4;border-radius:20px;
   max-width:300px;width:90%;padding:24px;text-align:center;
-  box-shadow:0 20px 60px rgba(0,0,0,.5);
+  box-shadow:0 20px 60px rgba(120,90,30,.18);
 }
 </style>
 </head>
@@ -683,8 +683,8 @@ input:focus{outline:none}
     </div>
     <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
       <div class="lib-badge">✦ প্রিমিয়াম</div>
-      <div id="offlineBadge" style="display:none;font-size:11px;color:#4ade80;display:flex;align-items:center;gap:5px">
-        <span style="width:6px;height:6px;border-radius:50%;background:#4ade80;display:inline-block"></span>অফলাইনে পড়া যাবে
+      <div id="offlineBadge" style="display:none;font-size:11px;color:#16a34a;display:flex;align-items:center;gap:5px">
+        <span style="width:6px;height:6px;border-radius:50%;background:#16a34a;display:inline-block"></span>অফলাইনে পড়া যাবে
       </div>
     </div>
   </div>
@@ -707,9 +707,9 @@ input:focus{outline:none}
     <div id="contCard" class="cont-card">
       <div id="contCover" style="width:60px;height:80px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:28px;flex-shrink:0;background:linear-gradient(135deg,#f59e0b,#b8741a)">📖</div>
       <div style="flex:1;min-width:0">
-        <div id="contTitle" style="font-weight:600;color:#fff;font-size:13px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">বই শিরোনাম</div>
-        <div id="contPct" style="font-size:11px;color:#f59e0b;margin-top:4px">শুরু করুন</div>
-        <div style="margin-top:8px;height:3px;background:#1e1e1e;border-radius:2px;overflow:hidden">
+        <div id="contTitle" style="font-weight:600;color:#2b2118;font-size:13px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">বই শিরোনাম</div>
+        <div id="contPct" style="font-size:11px;color:#b8741a;margin-top:4px">শুরু করুন</div>
+        <div style="margin-top:8px;height:3px;background:#ece0c4;border-radius:2px;overflow:hidden">
           <div id="contBar" style="height:100%;background:#f59e0b;border-radius:2px;width:0%;transition:width .5s ease"></div>
         </div>
         <div style="font-size:10px;color:#52525b;margin-top:6px">▶ পড়া চালিয়ে যান</div>
@@ -729,7 +729,7 @@ input:focus{outline:none}
   <!-- Empty -->
   <div id="emptyState" style="display:none;text-align:center;padding:60px 0 40px">
     <div style="font-size:56px;margin-bottom:16px">📚</div>
-    <h2 style="font-size:18px;font-weight:700;color:#d4d4d8;margin-bottom:8px">লাইব্রেরি খালি</h2>
+    <h2 style="font-size:18px;font-weight:700;color:#2b2118;margin-bottom:8px">লাইব্রেরি খালি</h2>
     <p style="font-size:13px;color:#52525b;margin-bottom:24px;line-height:1.6">আগে কিনে থাকলে নিচের বোতাম দিয়ে বই ফিরিয়ে আনুন</p>
     <button onclick="openRestore()" style="padding:13px 28px;background:#f59e0b;color:#000;border:none;border-radius:16px;font-size:14px;font-weight:700;cursor:pointer">
       🔄 Restore করুন
@@ -746,12 +746,12 @@ input:focus{outline:none}
     <div class="modal-handle"></div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
       <h3 style="font-size:16px;font-weight:700">🔄 লাইব্রেরি Restore</h3>
-      <button onclick="closeRestore()" style="background:#1e1e1e;border:none;color:#888;width:28px;height:28px;border-radius:50%;font-size:14px;cursor:pointer">✕</button>
+      <button onclick="closeRestore()" style="background:#f1ece0;border:none;color:#6b6256;width:28px;height:28px;border-radius:50%;font-size:14px;cursor:pointer">✕</button>
     </div>
     <div id="rs1">
-      <p style="font-size:13px;color:#888;margin-bottom:16px">ক্রয়কালীন ইমেইল দিন — OTP পাঠানো হবে</p>
+      <p style="font-size:13px;color:#6b6256;margin-bottom:16px">ক্রয়কালীন ইমেইল দিন — OTP পাঠানো হবে</p>
       <input id="rEmail" type="email" placeholder="email@example.com"
-        style="width:100%;background:#1a1a1a;border:1.5px solid #2a2a2a;border-radius:14px;padding:14px;color:#fff;font-size:16px;margin-bottom:14px;display:block;transition:border-color .2s"
+        style="width:100%;background:#fffaf0;border:1.5px solid #e8dcc0;border-radius:14px;padding:14px;color:#2b2118;font-size:16px;margin-bottom:14px;display:block;transition:border-color .2s"
         onfocus="this.style.borderColor='#f59e0b'" onblur="this.style.borderColor='#2a2a2a'"
         onkeydown="if(event.key==='Enter')doOTP()">
       <button onclick="doOTP()" style="width:100%;padding:14px;background:#f59e0b;color:#000;border:none;border-radius:14px;font-size:14px;font-weight:700;cursor:pointer">
@@ -760,28 +760,28 @@ input:focus{outline:none}
       <p id="rs1msg" style="font-size:13px;margin-top:12px;text-align:center;display:none"></p>
     </div>
     <div id="rs2" style="display:none">
-      <p style="font-size:13px;color:#888;margin-bottom:6px">ইমেইলে পাঠানো ৬ সংখ্যার কোড দিন</p>
-      <p id="rs2email" style="font-size:12px;color:#f59e0b;margin-bottom:18px"></p>
+      <p style="font-size:13px;color:#6b6256;margin-bottom:6px">ইমেইলে পাঠানো ৬ সংখ্যার কোড দিন</p>
+      <p id="rs2email" style="font-size:12px;color:#b8741a;margin-bottom:18px"></p>
       <input id="rOTP" type="number" placeholder="123456"
-        style="width:100%;background:#1a1a1a;border:1.5px solid #2a2a2a;border-radius:16px;padding:16px;color:#fff;font-size:28px;text-align:center;letter-spacing:12px;margin-bottom:14px;display:block;transition:border-color .2s"
+        style="width:100%;background:#fffaf0;border:1.5px solid #e8dcc0;border-radius:16px;padding:16px;color:#2b2118;font-size:28px;text-align:center;letter-spacing:12px;margin-bottom:14px;display:block;transition:border-color .2s"
         onfocus="this.style.borderColor='#f59e0b'" onblur="this.style.borderColor='#2a2a2a'"
         oninput="if(this.value.length>6)this.value=this.value.slice(0,6)"
         onkeydown="if(event.key==='Enter')doVerify()">
       <button onclick="doVerify()" style="width:100%;padding:14px;background:#f59e0b;color:#000;border:none;border-radius:16px;font-size:14px;font-weight:700;cursor:pointer">
         নিশ্চিত করুন ✓
       </button>
-      <button onclick="backS1()" style="width:100%;padding:10px;background:transparent;border:none;color:#666;font-size:13px;cursor:pointer;margin-top:6px">
+      <button onclick="backS1()" style="width:100%;padding:10px;background:transparent;border:none;color:#6b6256;font-size:13px;cursor:pointer;margin-top:6px">
         ← ইমেইল পরিবর্তন
       </button>
       <p id="rs2msg" style="font-size:13px;margin-top:12px;text-align:center;display:none"></p>
     </div>
     <div id="rs3" style="display:none">
-      <p style="font-size:13px;color:#888;margin-bottom:16px">✅ পরিচয় নিশ্চিত! বইগুলো ডাউনলোড হচ্ছে...</p>
+      <p style="font-size:13px;color:#6b6256;margin-bottom:16px">✅ পরিচয় নিশ্চিত! বইগুলো ডাউনলোড হচ্ছে...</p>
       <div id="rList" style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px"></div>
       <div id="rDone" style="display:none;text-align:center;padding:24px 0">
         <div style="font-size:48px;margin-bottom:12px">🎉</div>
-        <p style="color:#4ade80;font-size:16px;font-weight:700">Restore সফল হয়েছে!</p>
-        <p style="color:#666;font-size:13px;margin-top:6px">বইগুলো আপনার লাইব্রেরিতে আছে।</p>
+        <p style="color:#16a34a;font-size:16px;font-weight:700">Restore সফল হয়েছে!</p>
+        <p style="color:#6b6256;font-size:13px;margin-top:6px">বইগুলো আপনার লাইব্রেরিতে আছে।</p>
       </div>
     </div>
   </div>
@@ -792,9 +792,9 @@ input:focus{outline:none}
   <div class="confirm-modal">
     <div style="font-size:36px;margin-bottom:12px">🗑️</div>
     <h3 style="font-size:16px;font-weight:700;margin-bottom:8px">বই মুছবেন?</h3>
-    <p id="delTitle" style="font-size:13px;color:#888;margin-bottom:20px;line-height:1.5">এই বইটি ডিভাইস থেকে মুছে যাবে। পরে Restore করতে পারবেন।</p>
+    <p id="delTitle" style="font-size:13px;color:#6b6256;margin-bottom:20px;line-height:1.5">এই বইটি ডিভাইস থেকে মুছে যাবে। পরে Restore করতে পারবেন।</p>
     <div style="display:flex;gap:10px">
-      <button onclick="closeDelModal()" style="flex:1;padding:12px;background:#1e1e1e;border:none;border-radius:12px;color:#aaa;font-size:13px;font-weight:700;cursor:pointer">বাতিল</button>
+      <button onclick="closeDelModal()" style="flex:1;padding:12px;background:#f1ece0;border:none;border-radius:12px;color:#57514a;font-size:13px;font-weight:700;cursor:pointer">বাতিল</button>
       <button id="delConfirmBtn" style="flex:1;padding:12px;background:#dc2626;border:none;border-radius:12px;color:#fff;font-size:13px;font-weight:700;cursor:pointer">মুছুন ✕</button>
     </div>
   </div>
@@ -910,7 +910,7 @@ async function loadLibrary(){
         <button class="bk-del" onclick="event.stopPropagation();showDelModal('${esc(b.token)}','${esc(b.title||'ইবুক')}')">🗑</button>
         <div class="bk-info">
           <div class="bk-title">${esc(b.title||'ইবুক')}</div>
-          <div class="bk-pct" style="color:${pct>0?'#f59e0b':'#52525b'}">${pct>0?pct+'% পড়া':'পড়া শুরু করুন'}</div>
+          <div class="bk-pct" style="color:${pct>0?'#b8741a':'#71717a'}">${pct>0?pct+'% পড়া':'পড়া শুরু করুন'}</div>
         </div>`;
       card.onclick=()=>{window.location.href='/reader?token='+encodeURIComponent(b.token);};
       // Long press to show delete button
@@ -926,7 +926,7 @@ async function loadLibrary(){
     console.error(e);
     skel.style.display='none';
     empty.style.display='block';
-    empty.innerHTML='<div style="font-size:40px;margin-bottom:12px">⚠️</div><p style="color:#f87171;margin-bottom:16px">লাইব্রেরি লোড হয়নি।</p><button onclick="location.reload()" style="padding:10px 20px;background:#222;border:none;border-radius:12px;color:#e2e2e2;cursor:pointer;font-size:13px">আবার চেষ্টা করুন</button>';
+    empty.innerHTML='<div style="font-size:40px;margin-bottom:12px">⚠️</div><p style="color:#dc2626;margin-bottom:16px">লাইব্রেরি লোড হয়নি।</p><button onclick="location.reload()" style="padding:10px 20px;background:#f1ece0;border:none;border-radius:12px;color:#2b2118;cursor:pointer;font-size:13px">আবার চেষ্টা করুন</button>';
   }
 }
 
@@ -938,7 +938,7 @@ window.openRestore=openRestore;window.closeRestore=closeRestore;
 
 function setMsg(id,txt,isErr){
   const el=document.getElementById(id);
-  el.innerText=txt;el.style.color=isErr?'#f87171':'#fbbf24';el.style.display='block';
+  el.innerText=txt;el.style.color=isErr?'#dc2626':'#b45309';el.style.display='block';
 }
 function backS1(){
   document.getElementById('rs2').style.display='none';
@@ -985,10 +985,10 @@ async function downloadAll(){
   const db=await openDB();
   for(const b of rBooks){
     const row=document.createElement('div');
-    row.style.cssText='background:#1a1a1a;border:1px solid #2a2a2a;border-radius:12px;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:8px';
+    row.style.cssText='background:#fffaf0;border:1px solid #e8dcc0;border-radius:12px;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:8px';
     const st=document.createElement('span');
-    st.style.cssText='font-size:12px;color:#888';st.innerText=b.title;
-    const p=document.createElement('span');p.style.cssText='font-size:12px;color:#f59e0b;flex-shrink:0';p.innerText='⏳ ডাউনলোড...';
+    st.style.cssText='font-size:12px;color:#57514a';st.innerText=b.title;
+    const p=document.createElement('span');p.style.cssText='font-size:12px;color:#b8741a;flex-shrink:0';p.innerText='⏳ ডাউনলোড...';
     row.appendChild(st);row.appendChild(p);
     document.getElementById('rList').appendChild(row);
     try{
@@ -1007,8 +1007,8 @@ async function downloadAll(){
         tx.oncomplete=res;tx.onerror=()=>rej(tx.error);
       });
       try{await fetch('/mark-used/'+encodeURIComponent(b.token),{method:'POST'});}catch(_){}
-      p.innerText='✅ সম্পন্ন';p.style.color='#4ade80';
-    }catch(e){console.error(e);p.innerText='❌ ব্যর্থ';p.style.color='#f87171';}
+      p.innerText='✅ সম্পন্ন';p.style.color='#16a34a';
+    }catch(e){console.error(e);p.innerText='❌ ব্যর্থ';p.style.color='#dc2626';}
   }
   document.getElementById('rDone').style.display='block';
   setTimeout(()=>{closeRestore();loadLibrary();},2200);
@@ -1073,6 +1073,9 @@ color:#000;border:none;border-radius:14px;font-size:14px;font-weight:800;cursor:
 display:flex;align-items:center;justify-content:center;gap:8px}
 .install-btn:active{opacity:.85}
 .installed-note{font-size:11px;color:#52525b;margin-top:10px;line-height:1.5}
+.manual-steps{display:none;margin-top:12px;background:rgba(245,158,11,.08);
+border:1px solid rgba(245,158,11,.25);border-radius:12px;padding:12px;
+font-size:12.5px;color:#d4d4d8;line-height:1.7;text-align:left}
 /* Download progress */
 .dl-card{background:#111;border:1px solid #1e1e1e;border-radius:18px;padding:20px;margin-bottom:16px}
 .dl-icon{font-size:52px;display:block;margin-bottom:14px;animation:bob .8s ease-in-out infinite alternate}
@@ -1099,7 +1102,8 @@ color:#000;border:none;border-radius:14px;font-size:14px;font-weight:700;cursor:
     <button class="install-btn" id="installBtn" onclick="doInstall()">
       📲 ইনস্টল ও বই ডাউনলোড করুন
     </button>
-    <div class="installed-note">⚠️ এটাতে একটু সময় লাগতে পারে। রিফ্রেশ করবেন না।<br>ইনস্টল শেষে বইটি App-এ দেখতে পাবেন।</div>
+    <div class="installed-note" id="installNote">⚠️ এটাতে একটু সময় লাগতে পারে। রিফ্রেশ করবেন না।<br>ইনস্টল শেষে বইটি App-এ দেখতে পাবেন।</div>
+    <div class="manual-steps" id="manualSteps"></div>
   </div>
 
   <!-- Download progress -->
@@ -1118,6 +1122,13 @@ const TOKEN = {{ token|tojson }};
 const TITLE = {{ title|tojson }};
 const prog = document.getElementById('prog');
 const stat = document.getElementById('stat');
+const installCard  = document.getElementById('installCard');
+const installBtn    = document.getElementById('installBtn');
+const installNote   = document.getElementById('installNote');
+const manualSteps    = document.getElementById('manualSteps');
+
+const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.MSStream;
+const isStandalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 
 /* PWA Install prompt */
 let deferredPrompt = null;
@@ -1129,30 +1140,52 @@ function startDownload() {
   run();
 }
 
+// Already running inside the installed app — no need to ask to install again.
+if (isStandalone && installCard) {
+  installCard.style.display = 'none';
+}
+
+// Only CAPTURE the event here. Calling .prompt() before a real user click
+// is silently ignored/consumed by the browser — that was the bug stopping
+// the install dialog from ever actually appearing.
 window.addEventListener('beforeinstallprompt', e => {
   e.preventDefault();
   deferredPrompt = e;
-  // auto-trigger install prompt immediately (page opened by user click)
-  deferredPrompt.prompt();
-  deferredPrompt.userChoice
-    .then(() => { deferredPrompt = null; })
-    .catch(() => { deferredPrompt = null; });
 });
 
 async function doInstall() {
-  if(deferredPrompt) {
-    deferredPrompt.prompt();
-    deferredPrompt.userChoice.then(() => { deferredPrompt = null; }).catch(() => { deferredPrompt = null; });
+  installBtn.disabled = true;
+
+  if (deferredPrompt) {
+    // Genuine click → browser will actually show the native install dialog
+    try {
+      deferredPrompt.prompt();
+      const choice = await deferredPrompt.userChoice;
+      if (choice && choice.outcome === 'accepted') {
+        installNote.innerHTML = '✅ ইনস্টল হচ্ছে... কিছুক্ষণ পর App-এ বইটি পাবেন।';
+      } else {
+        installNote.innerHTML = '➡️ বই ডাউনলোড হচ্ছে। পরে ব্রাউজার মেনু (⋮) থেকে যেকোনো সময় App ইনস্টল করতে পারবেন।';
+      }
+    } catch(_) {}
+    deferredPrompt = null;
+  } else if (isIOS) {
+    manualSteps.style.display = 'block';
+    manualSteps.innerHTML = '📲 <strong>iPhone-এ ইনস্টল করতে:</strong><br>নিচের Share বাটনে ট্যাপ করুন (□↑ আইকন) → <strong>Add to Home Screen</strong> বেছে নিন।<br><span style="color:#71717a">iPhone-এ এটাই একমাত্র উপায় — Apple-এর সীমাবদ্ধতায় অটো-ইনস্টল সম্ভব না।</span>';
+    installNote.innerHTML = 'বই ডাউনলোড হচ্ছে, পাশাপাশি উপরের ধাপটি অনুসরণ করুন।';
+  } else {
+    manualSteps.style.display = 'block';
+    manualSteps.innerHTML = '📲 <strong>ইনস্টল করতে:</strong><br>ব্রাউজারের মেনু (⋮) → <strong>Add to Home screen</strong> বা <strong>Install app</strong> চাপুন।';
+    installNote.innerHTML = 'বই ডাউনলোড হচ্ছে, পাশাপাশি উপরের ধাপটি অনুসরণ করুন।';
   }
-  document.getElementById('installCard').style.opacity = '.5';
+
+  installBtn.disabled = false;
   startDownload();
 }
 
 window.addEventListener('appinstalled', () => {
-  const card = document.getElementById('installCard');
-  if(card) { card.style.background = 'rgba(74,222,128,.1)'; card.style.borderColor = 'rgba(74,222,128,.3)'; }
-  const btn = document.getElementById('installBtn');
-  if(btn) btn.innerText = '✅ ইনস্টল সম্পন্ন';
+  if (installCard) { installCard.style.background = 'rgba(74,222,128,.1)'; installCard.style.borderColor = 'rgba(74,222,128,.3)'; }
+  if (installBtn) installBtn.innerText = '✅ ইনস্টল সম্পন্ন';
+  if (manualSteps) manualSteps.style.display = 'none';
 });
 
 if('serviceWorker' in navigator)
