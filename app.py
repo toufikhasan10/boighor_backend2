@@ -268,7 +268,7 @@ def health():
 # ══════════════════════════════════════════════════════════════
 
 SW_JS = r"""
-const CACHE_V = 'boighor-v6';
+const CACHE_V = 'boighor-v7';
 const PRECACHE = [
   '/library',
   '/reader',
@@ -1014,7 +1014,17 @@ async function downloadAll(){
   setTimeout(()=>{closeRestore();loadLibrary();},2200);
 }
 
-loadLibrary();
+// If a book was downloaded via the install flow but never actually opened
+// (e.g. the tab was closed mid-install), jump straight to it instead of
+// showing the grid — this is what makes the book reachable from the app
+// icon even when the user left the website in between.
+const __pendingOpen=(()=>{try{return localStorage.getItem('boighor_pendingOpen');}catch(_){return null;}})();
+if(__pendingOpen){
+  try{localStorage.removeItem('boighor_pendingOpen');}catch(_){}
+  window.location.href='/reader?token='+encodeURIComponent(__pendingOpen);
+}else{
+  loadLibrary();
+}
 </script>
 </body>
 </html>
@@ -1061,7 +1071,15 @@ def download_confirm(token):
 body{background:#0d0d0d;color:#e2e2e2;font-family:'Segoe UI',system-ui,sans-serif;
 min-height:100vh;padding:24px;display:flex;flex-direction:column;align-items:center;justify-content:center}
 .box{text-align:center;max-width:360px;width:100%}
-/* Install card */
+/* Step badge — top of each card, makes the 2-step sequence obvious */
+.step-badge{display:inline-block;font-size:10px;font-weight:800;letter-spacing:.08em;
+text-transform:uppercase;padding:4px 12px;border-radius:20px;margin-bottom:14px}
+.step-badge.blue{background:rgba(56,189,248,.14);color:#38bdf8;border:1px solid rgba(56,189,248,.3)}
+.step-badge.gold{background:rgba(245,158,11,.14);color:#f59e0b;border:1px solid rgba(245,158,11,.3)}
+/* Cross-fade used when handing off from the download card to the install card */
+.fade-card{transition:opacity .32s ease}
+.fade-card.hide{opacity:0}
+/* Install card (Step 2 — gold/amber, matches the app + library branding) */
 .install-card{background:linear-gradient(135deg,rgba(245,158,11,.15),rgba(245,158,11,.05));
 border:1.5px solid rgba(245,158,11,.35);border-radius:20px;padding:20px;margin-bottom:20px;text-align:center}
 .app-icon{font-size:52px;display:block;margin-bottom:10px;animation:bob .8s ease-in-out infinite alternate}
@@ -1072,49 +1090,57 @@ border:1.5px solid rgba(245,158,11,.35);border-radius:20px;padding:20px;margin-b
 color:#000;border:none;border-radius:14px;font-size:14px;font-weight:800;cursor:pointer;
 display:flex;align-items:center;justify-content:center;gap:8px}
 .install-btn:active{opacity:.85}
+.install-btn:disabled{opacity:.6}
 .installed-note{font-size:11px;color:#52525b;margin-top:10px;line-height:1.5}
 .manual-steps{display:none;margin-top:12px;background:rgba(245,158,11,.08);
 border:1px solid rgba(245,158,11,.25);border-radius:12px;padding:12px;
 font-size:12.5px;color:#d4d4d8;line-height:1.7;text-align:left}
-/* Download progress */
-.dl-card{background:#111;border:1px solid #1e1e1e;border-radius:18px;padding:20px;margin-bottom:16px}
+.read-now-link{display:inline-block;margin-top:14px;padding:6px 4px;background:none;border:none;
+font-size:12.5px;color:#9c9ca3;text-decoration:underline;text-underline-offset:2px;cursor:pointer}
+.read-now-link:active{color:#e4e4e7}
+/* Download card (Step 1 — sky blue, signals a safe data transfer in progress) */
+.dl-card{background:linear-gradient(135deg,rgba(56,189,248,.13),rgba(14,165,233,.04));
+border:1.5px solid rgba(56,189,248,.32);border-radius:20px;padding:20px;margin-bottom:16px}
 .dl-icon{font-size:52px;display:block;margin-bottom:14px;animation:bob .8s ease-in-out infinite alternate}
 h1{font-size:18px;font-weight:700;color:#f0f0f0;margin-bottom:6px;line-height:1.3}
-.sub{font-size:12px;color:#666;margin-bottom:18px;line-height:1.6}
-.prog-wrap{background:#1a1a1a;border-radius:100px;height:5px;overflow:hidden;margin-bottom:10px}
-.prog-bar{height:100%;background:linear-gradient(90deg,#f59e0b,#d97706);border-radius:100px;
+.sub{font-size:12px;color:#7a8a97;margin-bottom:18px;line-height:1.6}
+.prog-wrap{background:#10222c;border-radius:100px;height:5px;overflow:hidden;margin-bottom:10px}
+.prog-bar{height:100%;background:linear-gradient(90deg,#38bdf8,#0ea5e9);border-radius:100px;
 transition:width .4s cubic-bezier(.4,0,.2,1);width:0%}
-#stat{font-size:12px;color:#666;transition:color .3s}
-#retryBtn{display:none;margin-top:16px;padding:12px 24px;background:#f59e0b;
-color:#000;border:none;border-radius:14px;font-size:14px;font-weight:700;cursor:pointer}
-.msg-good{color:#fbbf24!important}
+#stat{font-size:12px;color:#7a8a97;transition:color .3s}
+#retryBtn{display:none;margin-top:16px;padding:12px 24px;background:#38bdf8;
+color:#001018;border:none;border-radius:14px;font-size:14px;font-weight:700;cursor:pointer}
+.msg-good{color:#38bdf8!important}
 .msg-err{color:#f87171!important}
 .warn-note{font-size:11px;color:#52525b;margin-top:10px;line-height:1.5}
 </style>
 </head>
 <body>
 <div class="box">
-  <!-- App install card -->
-  <div class="install-card" id="installCard">
-    <span class="app-icon">📚</span>
-    <div class="app-name">বইঘর eBook Reader</div>
-    <div class="app-desc">ইবুক খুলতে বইঘর Reader প্রয়োজন।<br>নিচের বোতামে চাপলে App ইনস্টল হবে এবং<br>বইটি স্বয়ংক্রিয়ভাবে লোড হবে।</div>
-    <button class="install-btn" id="installBtn" onclick="doInstall()">
-      📲 ইনস্টল ও বই ডাউনলোড করুন
-    </button>
-    <div class="installed-note" id="installNote">⚠️ এটাতে একটু সময় লাগতে পারে। রিফ্রেশ করবেন না।<br>ইনস্টল শেষে বইটি App-এ দেখতে পাবেন।</div>
-    <div class="manual-steps" id="manualSteps"></div>
-  </div>
-
-  <!-- Download progress -->
-  <div class="dl-card">
+  <!-- STEP 1 — Book auto-download (shown first) -->
+  <div class="dl-card fade-card" id="dlCard">
+    <span class="step-badge blue">ধাপ ১/২ · বই ডাউনলোড</span>
     <span class="dl-icon">📥</span>
     <h1>{{ title }}</h1>
-    <p class="sub">বইটি নিরাপদে ডাউনলোড হচ্ছে।<br>কোনো সমস্যা নেই।</p>
+    <p class="sub">বইটি অটোমেটিক, নিরাপদে ডাউনলোড হচ্ছে।<br>কোনো সমস্যা নেই, একটু অপেক্ষা করুন।</p>
     <div class="prog-wrap"><div id="prog" class="prog-bar"></div></div>
     <div id="stat">🔒 নিরাপদ সংযোগ তৈরি হচ্ছে...</div>
     <button id="retryBtn" onclick="location.reload()">🔄 আবার চেষ্টা করুন</button>
-    <div class="warn-note">✅ ডাউনলোড শেষে App-এ লাইব্রেরি খুলে যাবে।</div>
+    <div class="warn-note" id="dlWarnNote">✅ ডাউনলোড শেষ হলে অ্যাপ ইনস্টলের ধাপে যাবেন।</div>
+  </div>
+
+  <!-- STEP 2 — Install Reader app (appears automatically after download finishes) -->
+  <div class="install-card fade-card hide" id="installCard" style="display:none">
+    <span class="step-badge gold">ধাপ ২/২ · অ্যাপ ইনস্টল</span>
+    <span class="app-icon">📚</span>
+    <div class="app-name">বইঘর eBook Reader</div>
+    <div class="app-desc">বইটি ডাউনলোড সম্পন্ন হয়েছে ✅<br>এখন পড়ার জন্য বইঘর Reader ইনস্টল করুন —<br>ইনস্টল হলেই বইটি নিজে থেকে খুলে যাবে।</div>
+    <button class="install-btn" id="installBtn" onclick="doInstall()">
+      📲 রিডার অ্যাপ ইনস্টল করুন
+    </button>
+    <div class="installed-note" id="installNote">⚠️ এতে একটু সময় লাগতে পারে। রিফ্রেশ করবেন না।<br>ইনস্টল শেষে বইটি নিজে থেকেই খুলে যাবে।</div>
+    <div class="manual-steps" id="manualSteps"></div>
+    <button class="read-now-link" id="readNowBtn" onclick="goToReader()">বই এখনই পড়ুন →</button>
   </div>
 </div>
 <script>
@@ -1122,13 +1148,37 @@ const TOKEN = {{ token|tojson }};
 const TITLE = {{ title|tojson }};
 const prog = document.getElementById('prog');
 const stat = document.getElementById('stat');
-const installCard  = document.getElementById('installCard');
-const installBtn    = document.getElementById('installBtn');
-const installNote   = document.getElementById('installNote');
+const dlCard         = document.getElementById('dlCard');
+const installCard    = document.getElementById('installCard');
+const installBtn     = document.getElementById('installBtn');
+const installNote    = document.getElementById('installNote');
 const manualSteps    = document.getElementById('manualSteps');
+const dlWarnNote     = document.getElementById('dlWarnNote');
 
 const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.MSStream;
 const isStandalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+
+function goToReader() {
+  try { localStorage.removeItem('boighor_pendingOpen'); } catch(_) {}
+  window.location.href = '/reader?token=' + encodeURIComponent(TOKEN);
+}
+
+// Already running inside the installed app — there's no "install" step, just download then open.
+if (isStandalone) {
+  const badge = dlCard.querySelector('.step-badge');
+  if (badge) badge.style.display = 'none';
+  if (dlWarnNote) dlWarnNote.innerHTML = '✅ ডাউনলোড শেষ হলে বইটি খুলে যাবে।';
+}
+
+// Step 1 → Step 2 hand-off: fade the download card out, fade the install card in.
+function showInstallStep() {
+  dlCard.classList.add('hide');
+  setTimeout(() => {
+    dlCard.style.display = 'none';
+    installCard.style.display = 'block';
+    setTimeout(() => installCard.classList.remove('hide'), 20);
+  }, 320);
+}
 
 /* PWA Install prompt */
 let deferredPrompt = null;
@@ -1138,11 +1188,6 @@ function startDownload() {
   if(downloadStarted) return;
   downloadStarted = true;
   run();
-}
-
-// Already running inside the installed app — no need to ask to install again.
-if (isStandalone && installCard) {
-  installCard.style.display = 'none';
 }
 
 // Only CAPTURE the event here. Calling .prompt() before a real user click
@@ -1162,30 +1207,34 @@ async function doInstall() {
       deferredPrompt.prompt();
       const choice = await deferredPrompt.userChoice;
       if (choice && choice.outcome === 'accepted') {
-        installNote.innerHTML = '✅ ইনস্টল হচ্ছে... কিছুক্ষণ পর App-এ বইটি পাবেন।';
+        installNote.innerHTML = '✅ ইনস্টল হচ্ছে... বইটি কয়েক সেকেন্ডের মধ্যে খুলে যাবে।';
+        setTimeout(goToReader, 1500);
       } else {
-        installNote.innerHTML = '➡️ বই ডাউনলোড হচ্ছে। পরে ব্রাউজার মেনু (⋮) থেকে যেকোনো সময় App ইনস্টল করতে পারবেন।';
+        installNote.innerHTML = '➡️ ঠিক আছে, বইটি এখন খোলা হচ্ছে। পরে ব্রাউজার মেনু (⋮) থেকে যেকোনো সময় App ইনস্টল করতে পারবেন।';
+        setTimeout(goToReader, 1800);
       }
     } catch(_) {}
     deferredPrompt = null;
+    installBtn.disabled = false;
   } else if (isIOS) {
     manualSteps.style.display = 'block';
     manualSteps.innerHTML = '📲 <strong>iPhone-এ ইনস্টল করতে:</strong><br>নিচের Share বাটনে ট্যাপ করুন (□↑ আইকন) → <strong>Add to Home Screen</strong> বেছে নিন।<br><span style="color:#71717a">iPhone-এ এটাই একমাত্র উপায় — Apple-এর সীমাবদ্ধতায় অটো-ইনস্টল সম্ভব না।</span>';
-    installNote.innerHTML = 'বই ডাউনলোড হচ্ছে, পাশাপাশি উপরের ধাপটি অনুসরণ করুন।';
+    installNote.innerHTML = 'উপরের ধাপ অনুসরণ করুন। শেষ হলে হোমস্ক্রিনের আইকনে ট্যাপ করলেই বইটি পাবেন — অথবা নিচ থেকে এখনই পড়া শুরু করুন।';
+    installBtn.disabled = false;
   } else {
     manualSteps.style.display = 'block';
     manualSteps.innerHTML = '📲 <strong>ইনস্টল করতে:</strong><br>ব্রাউজারের মেনু (⋮) → <strong>Add to Home screen</strong> বা <strong>Install app</strong> চাপুন।';
-    installNote.innerHTML = 'বই ডাউনলোড হচ্ছে, পাশাপাশি উপরের ধাপটি অনুসরণ করুন।';
+    installNote.innerHTML = 'উপরের ধাপ অনুসরণ করুন। শেষ হলে হোমস্ক্রিনের আইকনে ট্যাপ করলেই বইটি পাবেন — অথবা নিচ থেকে এখনই পড়া শুরু করুন।';
+    installBtn.disabled = false;
   }
-
-  installBtn.disabled = false;
-  startDownload();
 }
 
 window.addEventListener('appinstalled', () => {
   if (installCard) { installCard.style.background = 'rgba(74,222,128,.1)'; installCard.style.borderColor = 'rgba(74,222,128,.3)'; }
   if (installBtn) installBtn.innerText = '✅ ইনস্টল সম্পন্ন';
   if (manualSteps) manualSteps.style.display = 'none';
+  installNote.innerHTML = '✅ ইনস্টল সম্পন্ন! বইটি খোলা হচ্ছে...';
+  setTimeout(goToReader, 1200);
 });
 
 if('serviceWorker' in navigator)
@@ -1246,11 +1295,19 @@ async function run() {
       tx.onerror = () => rej(tx.error);
       tx.onabort = () => rej(tx.error || new Error('IndexedDB aborted'));
     });
+    try { localStorage.setItem('boighor_pendingOpen', TOKEN); } catch(_) {}
 
     prog.style.width = '100%';
-    setStatus('🎉 সংগ্রহ সম্পন্ন! লাইব্রেরিতে নিয়ে যাচ্ছি...', 'good');
+    setStatus('🎉 ডাউনলোড সম্পন্ন!', 'good');
     try { await fetch('/mark-used/' + encodeURIComponent(TOKEN), { method:'POST' }); } catch(_) {}
-    setTimeout(() => { window.location.href = '/library'; }, 900);
+
+    setTimeout(() => {
+      if (isStandalone) {
+        goToReader();
+      } else {
+        showInstallStep();
+      }
+    }, 700);
 
   } catch(e) { console.error(e); fail(e.message || 'অপ্রত্যাশিত ত্রুটি।'); }
 }
